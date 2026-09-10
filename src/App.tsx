@@ -7,14 +7,13 @@ import { Alert, Button, Descriptions, Modal, Space, Spin, Typography, message } 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AddressBalance,
-  AssetKind,
   OpenApiUtxo,
-  ResultState,
   RuneIndexerBalance,
   RuneIndexerEntry,
   RuneIndexerUtxo,
-  TimeLockBlocks,
   TimeLockRecord,
+  TimeLockCondition,
+  Version2TimeLockRecord,
 } from "./types";
 import {
   buildRuneTimeLockDeposit,
@@ -30,12 +29,18 @@ import {
   getAvailableUtxos,
   getBrc20AvailableBalance,
   getRuneMetadata,
+  getBlockchainInfo,
+  isCltvMature,
+  CHAIN_SNAPSHOT_TTL_MS,
 } from "./lib/openapi";
-import type { Brc20Balance } from "./lib/openapi";
+import type { Brc20Balance, BlockchainInfo } from "./lib/openapi";
 import { getRecommendedFeeRate } from "./lib/mempool";
 import { copyText, shortAddress } from "./lib/format";
-import { pushSignedPsbt, signPsbtCompat, signPsbtsCompat } from "./lib/wallet";
-import { DEFAULT_FEE_RATE } from "./constants";
+import { pushSignedPsbt, signPsbtCompat, signPsbtsCompat, createOperationGate, freezeOperationIdentity, watchOperationIdentity } from "./lib/wallet";
+import type { OperationIdentity } from "./lib/wallet";
+import { assertRecordsWritable, createStoredRecord, getCurrentRecord, readRecords, recordLock, RECORDS_KEYS, updateStoredRecord as persistRecordUpdate } from "./lib/records";
+import { describeLock, formatUtc, formatUtcDateInput, parseUtcLockDate, requireFutureDate } from "./lib/lock-date";
+import { normalizeNewTimeLockCondition } from "./lib/lock-condition";
 import { getErrorMessage } from "./lib/errors";
 import { normalizeSignedPsbtToHex, toUniSatSignInputs } from "./lib/psbt";
 import { useOpenApiKey } from "./hooks/useOpenApiKey";
@@ -43,20 +48,16 @@ import { useWalletUtxos } from "./hooks/useWalletUtxos";
 import { useWalletConnection } from "./hooks/useWalletConnection";
 import { WalletInfoCard } from "./components/WalletInfoCard";
 import { OperationPanel } from "./components/OperationPanel";
+import { LockWorkspaceNavigation } from "./components/LockWorkspaceNavigation";
+import { useLockWorkspaces, workspaceLockKind } from "./hooks/useLockWorkspaces";
 import { isSelectableUtxo } from "./lib/utxo";
 
-const TIMELOCK_STORAGE_KEY = "bitcoin_asset_timelock_records";
 const BUILD_COMMIT_HASH = __BUILD_COMMIT_HASH__;
-
-function readRecords(): TimeLockRecord[] {
-  try {
-    const stored = window.localStorage.getItem(TIMELOCK_STORAGE_KEY);
-    const value = stored ? JSON.parse(stored) : [];
-    return Array.isArray(value) ? value : [];
-  } catch {
-    return [];
-  }
-}
+// Defer the localStorage getter so storage-denied errors reach the record reader.
+const recordStorage = {
+  getItem: (key: string) => window.localStorage.getItem(key),
+  setItem: (key: string, value: string) => window.localStorage.setItem(key, value),
+};
 
 function isSupportedWalletAddress(address: string): boolean {
   const value = address.trim().toLowerCase();
@@ -184,59 +185,148 @@ function automaticFeeUtxoCandidates(utxos: OpenApiUtxo[]): OpenApiUtxo[] {
 
 function App() {
   const [messageApi, contextHolder] = message.useMessage();
-  const [ticker, setTicker] = useState("");
-  const [amount, setAmount] = useState("");
+  const [busy, updateBusy] = useState(false);
+  const busyRef = useRef(false);
+  const setBusy = (value: boolean) => { busyRef.current = value; updateBusy(value); };
+  const { workspace, draft, updateDraft, setResult, clearResults, applyRecommendedFee, resetFeeOverrides } = useLockWorkspaces(busyRef);
+  const { ticker, amount, assetKind, runeReference, lockBlocks, lockDate, feeRate, result } = draft;
+  const lockMode = workspaceLockKind(workspace);
   const [brc20Balances, setBrc20Balances] = useState<Brc20Balance[]>([]);
   const [brc20BalancesLoading, setBrc20BalancesLoading] = useState(false);
   const [runeBalances, setRuneBalances] = useState<RuneIndexerBalance[]>([]);
   const [runeBalancesLoading, setRuneBalancesLoading] = useState(false);
-  const [assetKind, setAssetKind] = useState<AssetKind>("brc20");
-  const [runeReference, setRuneReference] = useState("");
-  const [lockBlocks, setLockBlocks] = useState<TimeLockBlocks>(3);
-  const [feeRate, setFeeRate] = useState(DEFAULT_FEE_RATE);
   const [walletBalance, setWalletBalance] = useState<AddressBalance | null>(
     null,
   );
-  const [result, setResult] = useState<ResultState>({ status: "idle" });
   const [loadingText, setLoadingText] = useState("");
-  const [records, setRecords] = useState<TimeLockRecord[]>(readRecords);
-  const feeRateManuallySet = useRef(false);
+  const [recordState, setRecordState] = useState(() => readRecords(recordStorage));
+  const records = recordState.records.filter((record) => recordLock(record).kind === lockMode);
+  const operationGate = useRef(createOperationGate());
+  const [chainInfo, setChainInfo] = useState<BlockchainInfo | null>(null);
+  const [chainTimeError, setChainTimeError] = useState('');
+  const [chainTimeLoading, setChainTimeLoading] = useState(false);
+  const chainRequest = useRef(0);
+  const cltvDateInitialized = useRef(false);
+  const previousAutoChainContext = useRef('');
 
   const resetBuiltState = useCallback(() => {
     setResult({ status: "idle" });
-  }, []);
+  }, [setResult]);
   const wallet = useWalletConnection((msg) => messageApi.error(msg));
   const walletUtxos = useWalletUtxos();
   const clearLoadedData = useCallback(() => {
     setWalletBalance(null);
     walletUtxos.clear();
-    resetBuiltState();
-  }, [resetBuiltState, walletUtxos]);
+    clearResults();
+  }, [clearResults, walletUtxos]);
   const {
     openApiKey,
     openApiKeyForRequests,
     hasOpenApiKey,
     handleOpenApiKeyChange,
   } = useOpenApiKey(clearLoadedData);
+  const activeApiKey = useRef(openApiKeyForRequests);
+  activeApiKey.current = openApiKeyForRequests;
+  const chainContext = useMemo(() => ({ address: wallet.address, pubKey: wallet.pubKey, chain: String(wallet.chain), connected: wallet.connected, apiKey: openApiKeyForRequests }), [wallet.address, wallet.pubKey, wallet.chain, wallet.connected, openApiKeyForRequests]);
+  const activeChainContext = useRef(chainContext);
+  activeChainContext.current = chainContext;
+  const watchIdentity = (identity: OperationIdentity) => {
+    const guard = watchOperationIdentity(identity);
+    const expectedKey = openApiKeyForRequests;
+    return {
+      dispose: guard.dispose,
+      assertCurrent: async () => {
+        if (activeApiKey.current !== expectedKey) throw new Error('OpenAPI configuration changed. Operation stopped; saved progress was retained.');
+        await guard.assertCurrent();
+        if (activeApiKey.current !== expectedKey) throw new Error('OpenAPI configuration changed. Operation stopped; saved progress was retained.');
+      },
+    };
+  };
+
+  useEffect(() => { messageApi.destroy(); }, [workspace, messageApi]);
+
+  const refreshRecords = useCallback(() => setRecordState(readRecords(recordStorage)), []);
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || RECORDS_KEYS.some((key) => key === event.key)) refreshRecords();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [refreshRecords]);
 
   useEffect(() => {
-    window.localStorage.setItem(TIMELOCK_STORAGE_KEY, JSON.stringify(records));
-  }, [records]);
+    chainRequest.current += 1;
+    setChainInfo(null);
+    setChainTimeError('');
+    setChainTimeLoading(false);
+  }, [wallet.address, wallet.pubKey, wallet.chain, wallet.connected, openApiKeyForRequests]);
+
+  useEffect(() => {
+    if (!chainInfo) return;
+    const request = chainRequest.current;
+    const timer = window.setTimeout(() => {
+      if (request !== chainRequest.current) return;
+      setChainInfo(null);
+      setChainTimeError('Previous chain-time check expired. Refresh before relying on it.');
+    }, Math.max(0, chainInfo.checkedAt + CHAIN_SNAPSHOT_TTL_MS - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [chainInfo]);
+
+  const checkChainTime = useCallback(async (chain: string) => {
+    const context = activeChainContext.current;
+    if (context.chain !== chain || context.apiKey !== openApiKeyForRequests) throw new Error('Wallet or API configuration changed before the chain-time check. Retry.');
+    const request = ++chainRequest.current;
+    setChainInfo(null);
+    setChainTimeError('');
+    setChainTimeLoading(true);
+    try {
+      const info = await getBlockchainInfo(openApiKeyForRequests, chain);
+      if (request !== chainRequest.current || context !== activeChainContext.current) throw new Error('Wallet or API configuration changed during the chain-time check. Retry.');
+      setChainInfo(info);
+      return info;
+    } catch (error) {
+      if (request === chainRequest.current && context === activeChainContext.current) setChainTimeError(getErrorMessage(error));
+      throw error;
+    } finally {
+      if (request === chainRequest.current && context === activeChainContext.current) setChainTimeLoading(false);
+    }
+  }, [openApiKeyForRequests]);
+
+  const canRefreshChainTime = wallet.connected && !!wallet.address && !!wallet.pubKey && !!wallet.chain && hasOpenApiKey;
+  const refreshChainTime = useCallback(async () => {
+    if (busyRef.current || !canRefreshChainTime) return;
+    // This is a read-only preview. Transaction paths keep their separate wallet guards.
+    try { await checkChainTime(String(wallet.chain)); }
+    catch { /* Only the request owner updates the visible error state. */ }
+  }, [canRefreshChainTime, wallet.chain, checkChainTime]);
+
+  useEffect(() => {
+    const context = [workspace, wallet.connected, wallet.address, wallet.pubKey, wallet.chain].join('|');
+    if (context === previousAutoChainContext.current) return;
+    previousAutoChainContext.current = context;
+    // Load on CLTV entry / wallet changes, not on every API-key keystroke.
+    // Editing the key invalidates the old snapshot and requires an explicit refresh.
+    if (workspace === 'cltv') void refreshChainTime();
+  }, [workspace, wallet.connected, wallet.address, wallet.pubKey, wallet.chain, refreshChainTime]);
+
+  useEffect(() => {
+    if (busy || workspace !== 'cltv' || cltvDateInitialized.current || lockDate || !chainInfo || chainInfo.requestedChain !== wallet.chain) return;
+    cltvDateInitialized.current = true;
+    updateDraft({ lockDate: formatUtcDateInput(chainInfo.medianTime) });
+  }, [busy, workspace, lockDate, chainInfo, wallet.chain, updateDraft]);
 
   useEffect(() => {
     if (!hasOpenApiKey || !wallet.connected || !wallet.chain) return;
     let cancelled = false;
     void getRecommendedFeeRate(String(wallet.chain), openApiKeyForRequests)
       .then((recommendedFeeRate) => {
-        if (!cancelled && !feeRateManuallySet.current) {
-          setFeeRate(recommendedFeeRate);
-        }
+        if (!cancelled) applyRecommendedFee(recommendedFeeRate);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [hasOpenApiKey, openApiKeyForRequests, wallet.chain, wallet.connected]);
+  }, [hasOpenApiKey, openApiKeyForRequests, wallet.chain, wallet.connected, applyRecommendedFee]);
 
   useEffect(() => {
     if (assetKind !== "brc20" || !hasOpenApiKey || !wallet.connected || !wallet.address || !wallet.chain) {
@@ -300,14 +390,32 @@ function App() {
     };
   }, [assetKind, hasOpenApiKey, openApiKeyForRequests, wallet.address, wallet.chain, wallet.connected]);
 
+  const parsedLock = useMemo<{ lock?: TimeLockCondition; error: string }>(() => {
+    try {
+      if (lockMode === 'csv_blocks') return { lock: { kind: 'csv_blocks', blocks: lockBlocks }, error: '' };
+      const timestamp = parseUtcLockDate(lockDate);
+      return { lock: { kind: 'cltv_time', timestamp }, error: '' };
+    } catch (error) { return { error: getErrorMessage(error) }; }
+  }, [lockMode, lockBlocks, lockDate]);
+
+  const lockDateError = useMemo(() => {
+    if (parsedLock.error || parsedLock.lock?.kind !== 'cltv_time') return parsedLock.error;
+    if (!chainInfo) return 'Load fresh chain MTP for the current network before creating a lock.';
+    try {
+      isCltvMature(chainInfo, parsedLock.lock.timestamp, String(wallet.chain));
+      requireFutureDate(parsedLock.lock.timestamp, chainInfo.medianTime);
+      return '';
+    } catch (error) { return getErrorMessage(error); }
+  }, [parsedLock, chainInfo, wallet.chain]);
+
   const timeLockAddress = useMemo(() => {
     if (!wallet.pubKey) return "";
     try {
-      return deriveTimeLockAddress(wallet.pubKey, lockBlocks, wallet.chain);
+      return parsedLock.lock ? deriveTimeLockAddress(wallet.pubKey, parsedLock.lock, wallet.chain) : '';
     } catch {
       return "";
     }
-  }, [lockBlocks, wallet.pubKey, wallet.chain]);
+  }, [parsedLock, wallet.pubKey, wallet.chain]);
   const canFetchUtxos =
     wallet.connected &&
     !!wallet.address &&
@@ -322,6 +430,7 @@ function App() {
   const loading = !!loadingText;
 
   const handleConnect = async () => {
+    if (busy) return;
     setLoadingText("Connecting UniSat Wallet...");
     try {
       await wallet.connect();
@@ -333,14 +442,16 @@ function App() {
   };
 
   const handleDisconnect = async () => {
+    if (busy) return;
     await wallet.disconnect();
     clearLoadedData();
   };
 
   const handleSwitchChain = async (chain: import("./types").ChainType) => {
+    if (busy) return;
     setLoadingText(`Switching UniSat to ${chain}...`);
     try {
-      feeRateManuallySet.current = false;
+      resetFeeOverrides();
       await wallet.switchChain(chain);
       clearLoadedData();
       messageApi.success(
@@ -395,36 +506,33 @@ function App() {
   };
 
   const createRecord = (
-    params: Omit<TimeLockRecord, "id" | "createdAt" | "status">,
+    params: Omit<Version2TimeLockRecord, "id" | "createdAt" | "status" | "recordVersion">,
     status: TimeLockRecord["status"] = "locked",
   ) => {
     const id =
       globalThis.crypto?.randomUUID?.() ||
       `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const record: TimeLockRecord = {
+    const record: Version2TimeLockRecord = {
       ...params,
+      recordVersion: 2,
       id,
       createdAt: new Date().toISOString(),
       status,
     };
-    const nextRecords = [record, ...readRecords()];
-    window.localStorage.setItem(TIMELOCK_STORAGE_KEY, JSON.stringify(nextRecords));
-    setRecords(nextRecords);
-    return record;
+    try { return createStoredRecord(recordStorage, record); }
+    finally { refreshRecords(); }
   };
 
   const updateStoredRecord = (
-    id: string,
-    update: (record: TimeLockRecord) => TimeLockRecord,
+    record: TimeLockRecord,
+    patch: Pick<Partial<TimeLockRecord>, 'status' | 'broadcastStep' | 'pendingPsbts' | 'unlockTxid'>,
   ) => {
-    const nextRecords = readRecords().map((item) =>
-      item.id === id ? update(item) : item,
-    );
-    window.localStorage.setItem(TIMELOCK_STORAGE_KEY, JSON.stringify(nextRecords));
-    setRecords(nextRecords);
+    try { return persistRecordUpdate(recordStorage, record, patch); }
+    finally { refreshRecords(); }
   };
 
-  const broadcastPendingBrc20 = async (record: TimeLockRecord) => {
+  const broadcastPendingBrc20 = async (record: TimeLockRecord, assertCurrent: () => Promise<void>) => {
+    let current = getCurrentRecord(recordStorage, record);
     const signedPsbts = record.pendingPsbts;
     const expectedTxids = [
       record.initialCommitTxid,
@@ -439,6 +547,8 @@ function App() {
     const startStep = record.broadcastStep || 0;
     for (let index = startStep; index < 5; index += 1) {
       setLoadingText(`Broadcasting ${index + 1}/5...`);
+      await assertCurrent();
+      getCurrentRecord(recordStorage, current);
       let txid: string | undefined;
       try {
         txid = await pushSignedPsbt(signedPsbts[index]);
@@ -452,17 +562,16 @@ function App() {
           `Broadcast txid differs from the saved transaction at step ${index + 1}: ${txid}`,
         );
       }
-      updateStoredRecord(record.id, (item) => ({
-        ...item,
-        broadcastStep: index + 1,
-      }));
+      // Persist a completed broadcast before checking whether the wallet changed
+      // while its promise was pending. Never discard submitted progress.
+      current = updateStoredRecord(current, { broadcastStep: index + 1 });
+      await assertCurrent();
     }
-    updateStoredRecord(record.id, (item) => ({
-      ...item,
+    updateStoredRecord(current, {
       status: "locked",
       broadcastStep: undefined,
       pendingPsbts: undefined,
-    }));
+    });
     setResult({
       status: "timelock_success",
       commitTxid: record.lockCommitTxid!,
@@ -470,13 +579,13 @@ function App() {
       timeLockAddress: record.timeLockAddress,
     });
     messageApi.success("All five deposit transactions were broadcast. The final transfer inscription is locked.");
-    void fetchWalletUtxos();
   };
 
   const confirmLock = (params: {
     asset: string;
     timeLockAddress: string;
     estimatedCost: number;
+    identity: OperationIdentity;
   }) =>
     new Promise<boolean>((resolve) => {
       Modal.confirm({
@@ -485,16 +594,17 @@ function App() {
         content: (
           <Descriptions column={1} bordered size="small">
             <Descriptions.Item label="Current Network">
-              {String(wallet.chain)}
+              {params.identity.chain}
             </Descriptions.Item>
             <Descriptions.Item label="Current Address">
-              {wallet.address}
+              {params.identity.ownerAddress}
             </Descriptions.Item>
             <Descriptions.Item label="Time-lock Address">
               {params.timeLockAddress}
             </Descriptions.Item>
             <Descriptions.Item label="Lock Period">
-              {lockBlocks} blocks
+              {describeLock(params.identity.lock)}
+              {params.identity.lock.kind === 'cltv_time' && <div>Fixed date, not a duration after confirmation. It can pass before the deposit confirms. Spending requires chain MTP strictly after this date; no automatic transfer.</div>}
             </Descriptions.Item>
             <Descriptions.Item label="Locked Asset">
               {params.asset}
@@ -518,29 +628,50 @@ function App() {
       );
       return;
     }
+    if (!operationGate.current.enter()) return;
+    setBusy(true);
+    let guard: ReturnType<typeof watchOperationIdentity> | undefined;
     setResult({ status: "idle" });
     try {
+      if (!parsedLock.lock) throw new Error(parsedLock.error);
+      if (parsedLock.lock.kind === 'cltv_time' && lockDateError) throw new Error(lockDateError);
+      const identity = freezeOperationIdentity(wallet.address, wallet.pubKey, String(wallet.chain), parsedLock.lock);
+      guard = watchIdentity(identity);
+      const assertCurrent = guard.assertCurrent;
+      await assertCurrent();
+      assertRecordsWritable(recordStorage);
+      const checkFutureChainTime = async () => {
+        if (identity.lock.kind !== 'cltv_time') return;
+        const info = await checkChainTime(identity.chain);
+        await assertCurrent();
+        // Creation needs a future target; equality is not future either.
+        isCltvMature(info, identity.lock.timestamp, identity.chain);
+        requireFutureDate(identity.lock.timestamp, info.medianTime);
+      };
       if (!isSupportedWalletAddress(wallet.address)) {
         throw new Error(
           "Only native SegWit (bc1q / tb1q) and Taproot (bc1p / tb1p) wallet addresses are supported. P2PKH and P2SH are not supported.",
         );
       }
-      if (assetKind === "brc20" && records.some(
+      const pendingBrc20 = assetKind === "brc20" && readRecords(recordStorage).records.find(
         (record) =>
           record.status === "pending" &&
-          record.ownerAddress === wallet.address &&
-          record.chain === wallet.chain,
-      )) {
-        throw new Error("A BRC-20 deposit is still pending. Continue its broadcast from the local record before creating another one.");
+          record.ownerAddress === identity.ownerAddress &&
+          (!record.chain || record.chain === identity.chain),
+      );
+      if (pendingBrc20) {
+        const pendingWorkspace = recordLock(pendingBrc20).kind === 'csv_blocks' ? 'CSV (#/csv)' : 'CLTV (#/cltv)';
+        throw new Error(`A BRC-20 deposit is still pending. Open the ${pendingWorkspace} workspace and continue its saved broadcast before creating another BRC-20 lock.`);
       }
       if (assetKind === "brc20") {
         setLoadingText("Checking BRC-20 available balance...");
         const availableBalance = await getBrc20AvailableBalance(
-          wallet.address,
+          identity.ownerAddress,
           ticker,
           openApiKeyForRequests,
-          wallet.chain,
+          identity.chain,
         );
+        await assertCurrent();
         if (compareDecimalAmounts(availableBalance, amount) < 0) {
           throw new Error(
             `BRC-20 available balance for ${ticker} is ${availableBalance}, which is less than the requested lock amount of ${amount.trim()}.`,
@@ -549,31 +680,34 @@ function App() {
       }
       setLoadingText("Loading current wallet UTXOs...");
       const currentWalletUtxos = await getAvailableUtxos(
-        wallet.address,
+        identity.ownerAddress,
         openApiKeyForRequests,
         500,
-        wallet.chain,
+        identity.chain,
       );
+      await assertCurrent();
       walletUtxos.setFetchedUtxos(currentWalletUtxos);
       if (assetKind === "runes") {
         setLoadingText("Looking up Rune metadata and transferable UTXOs...");
         const metadata = await getRuneMetadata(
           runeReference,
           openApiKeyForRequests,
-          wallet.chain,
+          identity.chain,
         );
+        await assertCurrent();
         const runeUtxos = await getAddressRuneUtxos(
-          wallet.address,
+          identity.ownerAddress,
           metadata.runeid,
           openApiKeyForRequests,
-          wallet.chain,
+          identity.chain,
         );
+        await assertCurrent();
         const source = selectRuneUtxo(runeUtxos, metadata, amount);
         setLoadingText("Building the Runestone time-lock transaction...");
         const deposit = buildRuneTimeLockDeposit({
-          userAddress: wallet.address,
-          pubKey: wallet.pubKey,
-          lockBlocks,
+          userAddress: identity.ownerAddress,
+          pubKey: identity.pubKey,
+          lock: identity.lock,
           runeId: metadata.runeid,
           runeName: metadata.rune,
           runeAmount: amount,
@@ -585,39 +719,46 @@ function App() {
           runeUtxos: source.utxos,
           feeUtxos: automaticFeeUtxoCandidates(currentWalletUtxos),
           feeRate,
-          chain: wallet.chain,
+          chain: identity.chain,
         });
         setLoadingText("");
         if (!(await confirmLock({
           asset: `${amount.trim()} ${metadata.rune}`,
           timeLockAddress: deposit.timeLockAddress,
           estimatedCost: deposit.estimatedFee,
+          identity,
         }))) return;
+        await assertCurrent();
+        assertRecordsWritable(recordStorage);
         setLoadingText(
           "Review and sign the Runestone time-lock transaction in UniSat...",
         );
         const signed = await signPsbtCompat(deposit.psbtHex, {
           autoFinalized: true,
           toSignInputs: toUniSatSignInputs(deposit.toSignInputs),
-        });
+        }, async () => { await assertCurrent(); await checkFutureChainTime(); });
+        await assertCurrent();
+        assertRecordsWritable(recordStorage);
         setLoadingText("Broadcasting the Runestone time-lock transaction...");
         const txid = await pushSignedPsbt(normalizeSignedPsbtToHex(signed));
-        createRecord({
-          ownerAddress: wallet.address,
-          chain: wallet.chain,
+        try { createRecord({
+          ownerAddress: identity.ownerAddress,
+          ownerPubKey: identity.pubKey,
+          chain: identity.chain,
           assetKind: "runes",
           ticker: metadata.rune,
           amount: amount.trim(),
           runeId: metadata.runeid,
           runeName: metadata.rune,
-          lockBlocks,
+          lock: identity.lock,
           timeLockAddress: deposit.timeLockAddress,
           commitTxid: txid,
           revealTxid: txid,
           inscriptionTxid: txid,
           inscriptionVout: 1,
           inscriptionSatoshi: deposit.outputs[1].satoshi,
-        });
+        }); } catch (error) { throw new Error(`${getErrorMessage(error)} Broadcast transaction: ${txid}; lock address: ${deposit.timeLockAddress}; ${describeLock(identity.lock)}.`); }
+        await assertCurrent();
         setResult({
           status: "timelock_success",
           commitTxid: txid,
@@ -627,7 +768,6 @@ function App() {
         messageApi.success(
           "The Rune transfer was broadcast to the time-lock address.",
         );
-        void fetchWalletUtxos();
         return;
       }
       setLoadingText(
@@ -637,21 +777,24 @@ function App() {
         currentWalletUtxos,
       );
       const deposit = buildSingleUtxoTimeLockDeposit({
-        userAddress: wallet.address,
-        pubKey: wallet.pubKey,
+        userAddress: identity.ownerAddress,
+        pubKey: identity.pubKey,
         ticker,
         amount,
-        lockBlocks,
+        lock: identity.lock,
         feeRate,
         fundingUtxo,
-        chain: wallet.chain,
+        chain: identity.chain,
       });
       setLoadingText("");
       if (!(await confirmLock({
         asset: `${amount.trim()} ${ticker}`,
         timeLockAddress: deposit.timeLockAddress,
         estimatedCost: deposit.totalEstimatedFee,
+        identity,
       }))) return;
+      await assertCurrent();
+      assertRecordsWritable(recordStorage);
       setLoadingText("Review and sign all five transactions in UniSat...");
       const signedPsbts = await signPsbtsCompat(
         deposit.steps.map((step) => step.psbtHex),
@@ -659,14 +802,16 @@ function App() {
           autoFinalized: true,
           toSignInputs: toUniSatSignInputs(step.toSignInputs),
         })),
+        async () => { await assertCurrent(); await checkFutureChainTime(); },
       );
       const pendingRecord = createRecord({
-        ownerAddress: wallet.address,
-        chain: wallet.chain,
+        ownerAddress: identity.ownerAddress,
+        ownerPubKey: identity.pubKey,
+        chain: identity.chain,
         assetKind: "brc20",
         ticker,
         amount: amount.trim(),
-        lockBlocks,
+        lock: identity.lock,
         timeLockAddress: deposit.timeLockAddress,
         commitTxid: deposit.steps[3].txid,
         revealTxid: deposit.steps[4].txid,
@@ -681,12 +826,16 @@ function App() {
         broadcastStep: 0,
         pendingPsbts: signedPsbts.map(normalizeSignedPsbtToHex),
       }, "pending");
-      await broadcastPendingBrc20(pendingRecord);
+      await assertCurrent();
+      await broadcastPendingBrc20(pendingRecord, assertCurrent);
     } catch (error) {
       const msg = getErrorMessage(error);
       setResult({ status: "error", message: msg });
       messageApi.error(msg);
     } finally {
+      guard?.dispose();
+      operationGate.current.leave();
+      setBusy(false);
       setLoadingText("");
     }
   };
@@ -700,19 +849,47 @@ function App() {
       messageApi.error("Switch UniSat to the wallet and network that created this pending deposit before continuing.");
       return;
     }
+    if (!operationGate.current.enter()) return;
+    setBusy(true);
+    let guard: ReturnType<typeof watchOperationIdentity> | undefined;
     setResult({ status: "idle" });
     try {
-      await broadcastPendingBrc20(record);
+      getCurrentRecord(recordStorage, record);
+      const lock = recordLock(record);
+      const identity = freezeOperationIdentity(record.ownerAddress, wallet.pubKey, String(record.chain), lock);
+      guard = watchIdentity(identity);
+      await guard.assertCurrent();
+      if (deriveTimeLockAddress(identity.pubKey, lock, identity.chain) !== record.timeLockAddress || (record.recordVersion === 2 && record.ownerPubKey.toLowerCase() !== identity.pubKey.toLowerCase())) throw new Error('Saved lock address or public key does not match this wallet and lock condition.');
+      if (lock.kind === 'cltv_time') {
+        // This is a saved signed chain, not a new lock. Never rebuild its date.
+        // Do not continue funding a condition that cannot confirm a spend.
+        normalizeNewTimeLockCondition(lock);
+        const info = await checkChainTime(identity.chain);
+        await guard.assertCurrent();
+        if (info.medianTime >= lock.timestamp) {
+          setLoadingText('');
+          const proceed = await new Promise<boolean>((resolve) => Modal.confirm({
+            title: 'Fixed date has passed — continue saved transactions?',
+            content: `The original date is ${formatUtc(lock.timestamp)} on ${identity.chain}. Continue only the already-signed transaction chain; the date will not change and funds may have no remaining time delay.`,
+            okText: 'Continue Original Chain', cancelText: 'Cancel', onOk: () => resolve(true), onCancel: () => resolve(false),
+          }));
+          if (!proceed) return;
+        }
+      }
+      await broadcastPendingBrc20(record, guard.assertCurrent);
     } catch (error) {
       const msg = getErrorMessage(error);
       setResult({ status: "error", message: msg });
       messageApi.error(msg);
     } finally {
+      guard?.dispose();
+      operationGate.current.leave();
+      setBusy(false);
       setLoadingText("");
     }
   };
 
-  const handleUnlock = async (record: TimeLockRecord) => {
+  const handleUnlock = async (record: TimeLockRecord, skipMaturityCheck = false) => {
     if (!wallet.connected || !wallet.address || !wallet.pubKey) {
       messageApi.warning(
         "Connect the wallet that created this time lock first.",
@@ -741,63 +918,128 @@ function App() {
       messageApi.warning("Enter your UniSat OpenAPI key first.");
       return;
     }
+    if (!operationGate.current.enter()) return;
+    setBusy(true);
+    let guard: ReturnType<typeof watchOperationIdentity> | undefined;
+    let testStage = 'preparation';
     setResult({ status: "idle" });
     const lockInscriptionUtxo: OpenApiUtxo = {
       txid: record.inscriptionTxid,
       vout: record.inscriptionVout,
       satoshi: record.inscriptionSatoshi,
       // The time-lock script is deterministically reconstructed from the
-      // connected owner's public key and the saved block count in
+      // connected owner's public key and the saved lock condition in
       // buildTimeLockUnlockTx.
       scriptPk: "",
     };
     try {
+      getCurrentRecord(recordStorage, record);
+      const lock = recordLock(record);
+      if (skipMaturityCheck && lock.kind !== 'cltv_time') throw new Error('The maturity-check test is only available for CLTV records.');
+      const identity = freezeOperationIdentity(record.ownerAddress, wallet.pubKey, String(record.chain || wallet.chain), lock);
+      guard = watchIdentity(identity);
+      await guard.assertCurrent();
+      if (deriveTimeLockAddress(identity.pubKey, lock, identity.chain) !== record.timeLockAddress || (record.recordVersion === 2 && record.ownerPubKey.toLowerCase() !== identity.pubKey.toLowerCase())) throw new Error('Saved lock address or public key does not match this wallet and lock condition. Unlock stopped.');
+      if (skipMaturityCheck) {
+        const confirmed = await new Promise<boolean>((resolve) => {
+          Modal.confirm({
+            title: 'Test CLTV unlock without the web MTP check?',
+            width: 640,
+            autoFocusButton: 'cancel',
+            content: (
+              <Space direction="vertical" className="full cltv-unlock-test-confirm">
+                <Alert type="warning" showIcon message="This is a real signing and broadcast attempt, not a simulation."
+                  description="Only the website's maturity precheck is skipped for this attempt. The original CLTV script, target, nLockTime and sequence remain unchanged. If mature, this may actually unlock the asset and spend the transaction fee. Your wallet or its broadcast service may still reject it." />
+                <Descriptions column={1} bordered size="small">
+                  <Descriptions.Item label="Network">{identity.chain}</Descriptions.Item>
+                  <Descriptions.Item label="Asset">{record.amount} {record.runeName || record.ticker}</Descriptions.Item>
+                  <Descriptions.Item label="Return address">{identity.ownerAddress}</Descriptions.Item>
+                  <Descriptions.Item label="Locked outpoint">{record.inscriptionTxid}:{record.inscriptionVout}</Descriptions.Item>
+                  <Descriptions.Item label="Original target">{describeLock(lock)}</Descriptions.Item>
+                  <Descriptions.Item label="Last displayed MTP (not rechecked)">{chainInfo?.requestedChain === identity.chain ? formatUtc(chainInfo.medianTime) : 'Unknown'}</Descriptions.Item>
+                </Descriptions>
+                <span>A wallet/API rejection alone is not proof of a consensus rejection. Save the exact error and its reported stage. Normal Check &amp; Unlock remains protected.</span>
+              </Space>
+            ),
+            okText: 'Sign & Try Broadcast',
+            okButtonProps: { danger: true },
+            cancelText: 'Cancel',
+            onOk: () => resolve(true),
+            onCancel: () => resolve(false),
+          });
+        });
+        if (!confirmed) return;
+        await guard.assertCurrent();
+        getCurrentRecord(recordStorage, record);
+      }
       setLoadingText("Loading wallet UTXOs for the unlock fee...");
       const feeUtxos = await getAvailableUtxos(
-        wallet.address,
+        identity.ownerAddress,
         openApiKeyForRequests,
         500,
-        wallet.chain,
+        identity.chain,
       );
+      await guard.assertCurrent();
       setLoadingText("Building the time-lock unlock transaction...");
       const tx = buildTimeLockUnlockTx({
-        userAddress: wallet.address,
-        pubKey: wallet.pubKey,
-        lockBlocks: record.lockBlocks,
+        userAddress: identity.ownerAddress,
+        pubKey: identity.pubKey,
+        lock,
         inscriptionUtxo: lockInscriptionUtxo,
         feeUtxos,
         feeRate,
-        chain: wallet.chain,
+        chain: identity.chain,
       });
+      const assertBeforeUnlockSign = async () => {
+        testStage = 'pre-sign checks';
+        await guard!.assertCurrent();
+        if (lock.kind === 'cltv_time' && !skipMaturityCheck) {
+          setLoadingText('Checking chain MTP before unlock signing...');
+          const info = await checkChainTime(identity.chain);
+          await guard!.assertCurrent();
+          if (!isCltvMature(info, lock.timestamp, identity.chain)) throw new Error(`Fixed date not yet mature. Chain MTP (${formatUtc(info.medianTime)}) must be strictly after ${formatUtc(lock.timestamp)}.`);
+        }
+        getCurrentRecord(recordStorage, record);
+        testStage = 'wallet signing';
+      };
+      getCurrentRecord(recordStorage, record);
       setLoadingText(
-        `Sign the ${record.lockBlocks}-block time-lock unlock transaction in your wallet...`,
+        `Sign the ${describeLock(lock)} unlock transaction in your wallet...`,
       );
       const signed = await signPsbtCompat(tx.psbtHex, {
         autoFinalized: true,
         toSignInputs: toUniSatSignInputs(tx.toSignInputs),
-      });
+      }, assertBeforeUnlockSign);
+      testStage = 'post-sign checks';
+      await guard.assertCurrent();
+      getCurrentRecord(recordStorage, record);
+      const signedHex = normalizeSignedPsbtToHex(signed);
       setLoadingText("Broadcasting the unlock transaction...");
-      const unlockTxid = await pushSignedPsbt(normalizeSignedPsbtToHex(signed));
-      setRecords((current) =>
-        current.map((item) =>
-          item.id === record.id
-            ? { ...item, status: "unlocked", unlockTxid }
-            : item,
-        ),
-      );
-      setResult({ status: "success", txid: unlockTxid, label: "Unlock" });
+      testStage = 'wallet broadcast';
+      const unlockTxid = await pushSignedPsbt(signedHex);
+      testStage = 'after broadcast';
+      try { updateStoredRecord(record, { status: 'unlocked', unlockTxid }); }
+      catch (error) { throw new Error(`${getErrorMessage(error)} Unlock transaction was broadcast: ${unlockTxid}.`); }
+      await guard.assertCurrent();
+      setResult({ status: "success", txid: unlockTxid, label: skipMaturityCheck ? "CLTV test unlock (confirmation not checked)" : "Unlock" });
       messageApi.success(
-        `The time lock was released. The ${record.assetKind === "runes" ? "Rune" : "BRC-20 transfer inscription"} is returning to your wallet.`,
+        skipMaturityCheck
+          ? 'The wallet reported an unlock broadcast. Verify confirmation and asset balances on the original network; this is not proof of early unlocking.'
+          : `The time lock was released. The ${record.assetKind === "runes" ? "Rune" : "BRC-20 transfer inscription"} is returning to your wallet.`,
       );
-      void fetchWalletUtxos();
     } catch (error) {
       let msg = getErrorMessage(error);
-      if (isBip68NotFinalError(error)) {
-        msg = `Time lock not yet mature (non-BIP68-final). Wait for ${record.lockBlocks} confirmations before trying again.`;
+      const lock = recordLock(record);
+      if (lock.kind === 'csv_blocks' && isBip68NotFinalError(error)) {
+        msg = `Time lock not yet mature (non-BIP68-final). Wait for ${lock.blocks} confirmations before trying again.`;
       }
+      if (skipMaturityCheck) msg = `CLTV test — ${testStage}: ${msg} | ${record.chain || wallet.chain} | Outpoint ${record.inscriptionTxid}:${record.inscriptionVout} | ${describeLock(lock)}. The web MTP precheck was not used. This result alone does not establish a consensus rejection or successful early unlock.`;
       setResult({ status: "error", message: msg });
       messageApi.error(msg);
     } finally {
+      guard?.dispose();
+      operationGate.current.leave();
+      setBusy(false);
       setLoadingText("");
     }
   };
@@ -831,8 +1073,7 @@ function App() {
               Bitcoin Asset Time Lock
             </Typography.Title>
             <Typography.Paragraph type="secondary">
-              Lock BRC-20 transfer inscriptions or Runes with a Taproot relative
-              block time lock.
+              {workspace === 'csv' ? 'Lock BRC-20 transfer inscriptions or Runes for a relative number of blocks after confirmation.' : 'Lock BRC-20 transfer inscriptions or Runes until a fixed UTC date.'}
             </Typography.Paragraph>
           </div>
           {walletStatus}
@@ -841,7 +1082,7 @@ function App() {
           type="warning"
           showIcon
           message="Review every parameter before signing"
-          description="This tool supports native SegWit (bc1q / tb1q) and Taproot (bc1p / tb1p) addresses only; P2PKH and P2SH are not supported. Switch UniSat to the intended network before loading UTXOs. The lock period is measured in relative blocks after confirmation. LocalStorage records are not a backup."
+          description={`This tool supports native SegWit (bc1q / tb1q) and Taproot (bc1p / tb1p) addresses only; P2PKH and P2SH are not supported. Switch UniSat to the intended network before loading UTXOs. ${workspace === 'csv' ? 'The relative block delay starts after confirmation.' : 'The fixed UTC date can pass before the deposit confirms.'} LocalStorage records are not a backup.`}
         />
         {!wallet.walletDetected && (
           <Alert
@@ -868,6 +1109,8 @@ function App() {
           onOpenApiKeyChange={handleOpenApiKeyChange}
           onSwitchChain={handleSwitchChain}
         />
+        <LockWorkspaceNavigation workspace={workspace} busy={busy} />
+        <section className="lock-workspace" aria-label={`${workspace.toUpperCase()} workspace`}>
         <OperationPanel
           ticker={ticker}
           brc20Balances={brc20Balances}
@@ -878,6 +1121,16 @@ function App() {
           assetKind={assetKind}
           runeReference={runeReference}
           lockBlocks={lockBlocks}
+          workspace={workspace}
+          lockDate={lockDate}
+          lockDateError={lockDateError}
+          lockCondition={parsedLock.lock}
+          busy={busy}
+          recordErrors={recordState.errors}
+          chainInfo={chainInfo?.requestedChain === wallet.chain ? chainInfo : null}
+          chainTimeError={chainTimeError}
+          chainTimeLoading={chainTimeLoading}
+          canRefreshChainTime={canRefreshChainTime}
           feeRate={feeRate}
           timeLockAddress={timeLockAddress}
           hasOpenApiKey={hasOpenApiKey}
@@ -885,30 +1138,29 @@ function App() {
           result={result}
           records={records}
           onTickerChange={(value) => {
-            setTicker(value);
-            setAmount("");
+            updateDraft({ ticker: value, amount: '' });
             resetBuiltState();
           }}
           onAmountChange={(value) => {
-            setAmount(value);
+            updateDraft({ amount: value });
             resetBuiltState();
           }}
           onAssetKindChange={(value) => {
-            setAssetKind(value);
+            updateDraft({ assetKind: value });
             resetBuiltState();
           }}
           onRuneReferenceChange={(value) => {
-            setRuneReference(value);
-            setAmount("");
+            updateDraft({ runeReference: value, amount: '' });
             resetBuiltState();
           }}
           onLockBlocksChange={(value) => {
-            setLockBlocks(value);
+            updateDraft({ lockBlocks: value });
             resetBuiltState();
           }}
+          onLockDateChange={(value) => { cltvDateInitialized.current = true; updateDraft({ lockDate: value }); resetBuiltState(); }}
+          onRefreshChainTime={refreshChainTime}
           onFeeRateChange={(value) => {
-            feeRateManuallySet.current = true;
-            setFeeRate(value);
+            updateDraft({ feeRate: value, feeRateManuallySet: true });
             resetBuiltState();
           }}
           onCreate={handleCreate}
@@ -916,9 +1168,10 @@ function App() {
           onUnlock={handleUnlock}
           onCopy={handleCopy}
         />
+        </section>
       </section>
       <footer className="build-footer">
-        Build commit: <code>{BUILD_COMMIT_HASH}</code>
+        Source revision: <code>{BUILD_COMMIT_HASH}</code>
       </footer>
     </main>
   );

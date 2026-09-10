@@ -1,10 +1,11 @@
 import { bitcoin, toPsbtNetwork, toXOnly } from '@unisat/wallet-bitcoin'
 import { NetworkType } from '@unisat/wallet-types'
 import { Buffer } from 'buffer'
-import type { BuiltTimeLockDepositTx, BuiltTimeLockUnlockTx, BuiltTxOutput, ChainType, OpenApiUtxo, TimeLockBlocks, ToSignInput } from '../types'
+import type { BuiltTimeLockDepositTx, BuiltTimeLockUnlockTx, BuiltTxOutput, ChainType, OpenApiUtxo, TimeLockBlocks, TimeLockCondition, ToSignInput } from '../types'
 import { buildRuneTransferRunestone, parseRuneId } from './runestone'
 import type { BuiltRuneTimeLockDepositTx } from '../types'
-import { buildTimeLockMetadataScript, getOwnerAddressType } from './recovery'
+import { buildTimeLockMetadataScript, getOwnerAddressType, type TimeLockMetadata } from './recovery'
+import { normalizeNewTimeLockCondition, resolveTimeLockCondition } from './lock-condition'
 
 const TAPLEAF_VERSION = 0xc0
 const INSCRIPTION_SATOSHI = 546
@@ -15,7 +16,7 @@ const DUST_THRESHOLD = 546
 const REVEAL_FEE_BUFFER_VBYTES = 100
 const REVEAL_FEE_BUFFER_MIN = 350
 // BIP341 NUMS internal key: no corresponding known private key. BATL outputs
-// therefore cannot be spent through Taproot key path and must use the CSV leaf.
+// therefore cannot be spent through Taproot key path and must use the lock leaf.
 const INTERNAL_KEY = Buffer.from(
   '50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0',
   'hex',
@@ -154,13 +155,12 @@ function makeTapPayment(script: Buffer, chain?: ChainType | string): TapPayment 
   }
 }
 
-function buildTimeLockPayment(pubKey: string, lockBlocks: TimeLockBlocks, chain?: ChainType | string): TapPayment {
-  if (!Number.isInteger(lockBlocks) || lockBlocks < 1 || lockBlocks > 0xffff) {
-    throw new Error('Relative block time lock must be an integer from 1 to 65535.')
-  }
+function buildTimeLockPayment(pubKey: string, condition: TimeLockBlocks | TimeLockCondition, chain?: ChainType | string): TapPayment {
+  const lock = resolveTimeLockCondition(typeof condition === 'number' ? { lockBlocks: condition } : { lock: condition })
+  const value = lock.kind === 'csv_blocks' ? lock.blocks : lock.timestamp
   const script = bitcoin.script.compile([
-    lockBlocks <= 16 ? bitcoin.opcodes.OP_1 + lockBlocks - 1 : bitcoin.script.number.encode(lockBlocks),
-    bitcoin.opcodes.OP_CHECKSEQUENCEVERIFY,
+    value <= 16 ? bitcoin.opcodes.OP_1 + value - 1 : bitcoin.script.number.encode(value),
+    lock.kind === 'csv_blocks' ? bitcoin.opcodes.OP_CHECKSEQUENCEVERIFY : bitcoin.opcodes.OP_CHECKLOCKTIMEVERIFY,
     bitcoin.opcodes.OP_DROP,
     toXOnly(cleanPubKey(pubKey)),
     bitcoin.opcodes.OP_CHECKSIG,
@@ -168,16 +168,21 @@ function buildTimeLockPayment(pubKey: string, lockBlocks: TimeLockBlocks, chain?
   return makeTapPayment(script, chain)
 }
 
-function buildRecoveryMetadataOutput(pubKey: string, ownerAddress: string, lockBlocks: TimeLockBlocks): OutputSpec {
+function recoveryMetadata(pubKey: string, ownerAddress: string, lock: TimeLockCondition): TimeLockMetadata {
+  const owner = {
+    xOnlyPubKey: toXOnly(cleanPubKey(pubKey)).toString('hex'),
+    ownerAddressType: getOwnerAddressType(ownerAddress, pubKey),
+  }
+  return lock.kind === 'csv_blocks'
+    ? { ...owner, version: 1, lockBlocks: lock.blocks }
+    : { ...owner, version: 2, lockTime: lock.timestamp }
+}
+
+function buildRecoveryMetadataOutput(pubKey: string, ownerAddress: string, lock: TimeLockCondition): OutputSpec {
   return {
     type: 'timelock_metadata',
     satoshi: 0,
-    script: buildTimeLockMetadataScript({
-      version: 1,
-      lockBlocks,
-      xOnlyPubKey: toXOnly(cleanPubKey(pubKey)).toString('hex'),
-      ownerAddressType: getOwnerAddressType(ownerAddress, pubKey),
-    }),
+    script: buildTimeLockMetadataScript(recoveryMetadata(pubKey, ownerAddress, lock)),
   }
 }
 
@@ -292,8 +297,8 @@ export function getUnsignedPsbtTxId(psbtHex: string, chain?: ChainType | string)
   return buildUnsignedTxId(bitcoin.Psbt.fromHex(psbtHex, { network: networkForChain(chain) }))
 }
 
-export function deriveTimeLockAddress(pubKey: string, lockBlocks: TimeLockBlocks, chain?: ChainType | string): string {
-  return buildTimeLockPayment(pubKey, lockBlocks, chain).address
+export function deriveTimeLockAddress(pubKey: string, lock: TimeLockBlocks | TimeLockCondition, chain?: ChainType | string): string {
+  return buildTimeLockPayment(pubKey, lock, chain).address
 }
 
 export function buildBrc20TransferContent(ticker: string, amount: string): string {
@@ -476,23 +481,25 @@ export function buildSingleUtxoTimeLockDeposit(params: {
   pubKey: string
   ticker: string
   amount: string
-  lockBlocks: TimeLockBlocks
+  lockBlocks?: TimeLockBlocks
+  lock?: TimeLockCondition
   feeRate: number
   fundingUtxo: OpenApiUtxo
   chain?: ChainType | string
 }): BuiltTimeLockDepositTx {
+  const lock = normalizeNewTimeLockCondition(resolveTimeLockCondition(params))
   if (!isSpendable(params.fundingUtxo)) throw new Error('Select one spendable funding UTXO.')
   const userAddress = params.userAddress.trim()
   const network = networkForChain(params.chain)
   const userScript = scriptForAddress(userAddress, params.chain)
   const transferContent = buildBrc20TransferContent(params.ticker, params.amount)
-  const timeLock = buildTimeLockPayment(params.pubKey, params.lockBlocks, params.chain)
+  const timeLock = buildTimeLockPayment(params.pubKey, lock, params.chain)
   const inscription = buildInscriptionPayment(params.pubKey, transferContent, params.chain)
   const root = params.fundingUtxo
   const rootLike = { ...root, scriptPk: userScript.toString('hex') }
   const selfInscription: OutputSpec = { type: 'timelock_transfer', address: userAddress, satoshi: INSCRIPTION_SATOSHI, script: userScript }
   const lockedInscription: OutputSpec = { type: 'timelock_transfer', address: timeLock.address, satoshi: INSCRIPTION_SATOSHI, script: timeLock.output }
-  const recoveryMetadata = buildRecoveryMetadataOutput(params.pubKey, userAddress, params.lockBlocks)
+  const recoveryMetadata = buildRecoveryMetadataOutput(params.pubKey, userAddress, lock)
   const commitTemplate: OutputSpec = { type: 'timelock_commit', address: inscription.address, satoshi: 0, script: inscription.output }
   const firstChangeTemplate: OutputSpec = { type: 'timelock_commit_change', address: userAddress, satoshi: 0, script: userScript }
   const fee1 = estimateFee([rootLike], [commitTemplate, firstChangeTemplate], params.feeRate)
@@ -554,7 +561,8 @@ export function buildSingleUtxoTimeLockDeposit(params: {
 export function buildRuneTimeLockDeposit(params: {
   userAddress: string
   pubKey: string
-  lockBlocks: TimeLockBlocks
+  lockBlocks?: TimeLockBlocks
+  lock?: TimeLockCondition
   runeId: string
   runeName: string
   runeAmount: string
@@ -565,6 +573,7 @@ export function buildRuneTimeLockDeposit(params: {
   feeRate: number
   chain?: ChainType | string
 }): BuiltRuneTimeLockDepositTx {
+  const lock = normalizeNewTimeLockCondition(resolveTimeLockCondition(params))
   if (!params.runeUtxos.length || params.runeUtxos.some((utxo) => !isSpendable(utxo))) throw new Error('Select one or more spendable Rune UTXOs.')
   const runeUtxoKeys = new Set(params.runeUtxos.map((utxo) => `${utxo.txid}:${utxo.vout}`))
   if (runeUtxoKeys.size !== params.runeUtxos.length) throw new Error('Each Rune UTXO can be used only once.')
@@ -574,7 +583,7 @@ export function buildRuneTimeLockDeposit(params: {
   if (!/^\d+$/.test(amount) || BigInt(amount) <= 0n) throw new Error('Rune amount must be a positive integer in base units.')
   if (!/^\d+$/.test(balance) || BigInt(balance) < BigInt(amount)) throw new Error('Combined Rune UTXO balance must be at least the lock amount.')
   const network = networkForChain(params.chain)
-  const timeLock = buildTimeLockPayment(params.pubKey, params.lockBlocks, params.chain)
+  const timeLock = buildTimeLockPayment(params.pubKey, lock, params.chain)
   const userScript = scriptForAddress(params.userAddress, params.chain)
   const needsRuneChange = params.hasUnallocatedRunes || BigInt(balance) > BigInt(amount)
   const runestone = buildRuneTransferRunestone({
@@ -582,12 +591,7 @@ export function buildRuneTimeLockDeposit(params: {
     amount,
     destinationOutput: 1,
     pointerOutput: needsRuneChange ? 2 : undefined,
-    recoveryMetadata: {
-      version: 1,
-      lockBlocks: params.lockBlocks,
-      xOnlyPubKey: toXOnly(cleanPubKey(params.pubKey)).toString('hex'),
-      ownerAddressType: getOwnerAddressType(params.userAddress, params.pubKey),
-    },
+    recoveryMetadata: recoveryMetadata(params.pubKey, params.userAddress, lock),
   })
   const outputs: OutputSpec[] = [
     { type: 'runestone', satoshi: 0, script: runestone },
@@ -628,17 +632,19 @@ export function buildRuneTimeLockDeposit(params: {
 export function buildTimeLockUnlockTx(params: {
   userAddress: string
   pubKey: string
-  lockBlocks: TimeLockBlocks
+  lockBlocks?: TimeLockBlocks
+  lock?: TimeLockCondition
   inscriptionUtxo: OpenApiUtxo
   feeUtxos: OpenApiUtxo[]
   feeRate: number
   chain?: ChainType | string
 }): BuiltTimeLockUnlockTx {
+  const lock = resolveTimeLockCondition(params)
   if (!params.inscriptionUtxo.txid || !Number.isInteger(params.inscriptionUtxo.vout) || params.inscriptionUtxo.vout < 0 || params.inscriptionUtxo.satoshi <= 0) {
     throw new Error('The saved time-lock outpoint is invalid.')
   }
   const network = networkForChain(params.chain)
-  const payment = buildTimeLockPayment(params.pubKey, params.lockBlocks, params.chain)
+  const payment = buildTimeLockPayment(params.pubKey, lock, params.chain)
   if (params.inscriptionUtxo.scriptPk && decodeScript(params.inscriptionUtxo.scriptPk).toString('hex') !== payment.output.toString('hex')) {
     throw new Error('The selected record does not match this wallet public key or lock period.')
   }
@@ -660,10 +666,12 @@ export function buildTimeLockUnlockTx(params: {
   })
   const psbt = new bitcoin.Psbt({ network })
   psbt.setVersion(2)
+  if (lock.kind === 'cltv_time') psbt.setLocktime(lock.timestamp)
   psbt.addInput({
     hash: params.inscriptionUtxo.txid,
     index: params.inscriptionUtxo.vout,
-    sequence: params.lockBlocks,
+    // CLTV requires non-final nSequence; bit 31 disables unrelated BIP68 locks.
+    sequence: lock.kind === 'csv_blocks' ? lock.blocks : 0xffff_fffe,
     witnessUtxo: { value: params.inscriptionUtxo.satoshi, script: payment.output },
     tapLeafScript: payment.tapLeafScript,
     tapInternalKey: INTERNAL_KEY,

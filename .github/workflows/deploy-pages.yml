@@ -2,14 +2,15 @@ name: Deploy GitHub Pages
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
+    inputs:
+      base_path:
+        description: "Asset base path; use / for a custom domain or /repository-name/ for project Pages"
+        required: true
+        default: /bitcoin-asset-timelock-tool/
+        type: string
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -25,14 +26,21 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
         run: npm ci
 
       - name: Build
+        env:
+          VITE_BASE_PATH: ${{ inputs.base_path }}
         run: npm run build
+
+      - name: Test and validate documentation
+        run: |
+          npm test
+          npm run docs:check
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
@@ -42,6 +50,9 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

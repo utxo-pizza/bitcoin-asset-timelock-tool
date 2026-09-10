@@ -175,6 +175,52 @@ input {
   text-align: right;
 }
 
+.lock-date-field { display: grid; gap: 6px; min-width: 0; }
+.lock-date-field input { width: 100%; min-width: 0; }
+.lock-date-field > .ant-btn { justify-self: start; }
+.field-error { margin-top: 6px; color: #b42318; font-size: 13px; overflow-wrap: anywhere; }
+.chain-time-status { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; overflow-wrap: anywhere; }
+.chain-time-status > div { min-width: 0; }
+.lock-condition-tag { white-space: normal; overflow-wrap: anywhere; }
+
+.workspace-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 24px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #d0d5dd;
+}
+
+.workspace-navigation a {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 14px;
+  color: #475467;
+  border-radius: 6px;
+  text-decoration: none;
+}
+
+.workspace-navigation a:hover { background: #eaecf0; }
+.workspace-navigation a[aria-current="page"] { background: #eaf2ff; color: #175cd3; box-shadow: inset 0 -2px #175cd3; }
+.workspace-navigation a:focus-visible { outline: 2px solid #175cd3; outline-offset: 2px; }
+.workspace-navigation a[aria-disabled="true"] { cursor: not-allowed; opacity: .65; }
+.workspace-navigation-status { flex-basis: 100%; color: #667085; font-size: 12px; }
+.lock-workspace .ant-alert-description { overflow-wrap: anywhere; }
+.cltv-unlock-test-confirm { overflow-wrap: anywhere; }
+
+@media (max-width: 640px) {
+  .workspace-navigation { gap: 8px; }
+  .workspace-navigation a { flex: 1; flex-direction: column; gap: 2px; padding: 10px 12px; }
+  .workspace-navigation a span { font-size: 12px; }
+  .chain-time-status { flex-direction: column; }
+  .tool-card .ant-list-item { align-items: stretch; flex-direction: column; gap: 12px; }
+  .tool-card .ant-list-item-action { margin-inline-start: 0; align-self: flex-end; }
+  .tool-card .ant-segmented-item-label { white-space: normal; line-height: 1.4; padding-block: 6px; }
+}
+
 
 .mt-16 {
   margin-top: 16px;

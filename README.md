@@ -1,100 +1,92 @@
-# Bitcoin Asset Time Lock
+# Bitcoin Asset Time Lock · UTXO Pizza
 
-A browser-based Taproot relative-block time-lock tool for Bitcoin assets. It supports Fractal BRC-20 `transfer` inscriptions and Runes on either Bitcoin mainnet or Fractal Bitcoin. Transactions are built locally; UniSat only signs and broadcasts them.
+A browser-based tool for locking BRC-20 transfer inscriptions and Runes in Taproot outputs. Transactions are built locally; UniSat handles signing and broadcasting. No private key or seed phrase is requested.
 
-[Open the live app](https://unisat-wallet.github.io/bitcoin-asset-timelock-tool/)
+[Open the live app](https://timelock-tool.utxo.pizza/) · [CSV relative blocks](https://timelock-tool.utxo.pizza/#/csv) · [CLTV fixed UTC date](https://timelock-tool.utxo.pizza/#/cltv)
 
-## Features
+This is the **UTXO Pizza community-maintained fork** of [UniSat's Bitcoin Asset Time Lock](https://github.com/unisat-wallet/bitcoin-asset-timelock-tool). It adds fixed-date CLTV locks, separate workspaces, Chain MTP-based date handling, stricter record and operation checks, and regression tests. It is not an official UniSat deployment or an independently audited custody product. The original [MIT license and copyright notice](LICENSE) are preserved.
 
-- Lock BRC-20 or Runes assets on-chain for a configurable period, measured in relative blocks.
-- Include a public `OP_RETURN` time-lock marker using the open [BATL protocol](docs/BATL-PROTOCOL.md).
-- View the lock status and details of locked assets in the UniScan block explorer.
-- Support Bitcoin and Fractal Bitcoin mainnets and testnets.
+## Choose the right lock
 
-## Screenshots
+| | CSV: relative blocks | CLTV: fixed UTC date |
+| --- | --- | --- |
+| Page | `#/csv` | `#/cltv` |
+| Condition | Wait 1–65,535 blocks after the locked output confirms | Wait until the original network's median-time-past (MTP) is strictly later than the target |
+| Clock | Confirmed block age | Chain MTP, not your computer clock |
+| BATL marker | v1 | v2 |
+| New-lock limit | 65,535 blocks | `2106-02-07 06:28:13 UTC` under current timestamp rules |
 
-### Create and manage asset time locks
-
-Connect a wallet, configure an asset time lock, and manage local records to unlock assets once the lock period has elapsed.
-
-![App interface showing wallet setup, BRC-20 time-lock configuration, and local unlock records](https://github.com/user-attachments/assets/cc4d88b4-2916-4c40-969b-c40d4af2f93a)
-
-### Inspect locked assets in UniScan
-
-UniScan identifies the public time-lock marker and the locked asset output in the transaction view.
-
-![UniScan transaction view highlighting the Bitcoin Asset Time Lock marker and locked Runes output](https://github.com/user-attachments/assets/090b36da-3ac8-447d-8b40-48fbffd1da9d)
-
-The lock details show the BATL protocol version, asset type, relative lock period, owner address, and locked output.
-
-![UniScan time-lock details showing a verified Runes lock output with a three-block relative lock](https://github.com/user-attachments/assets/38dca86f-7b05-4c33-80d3-b06e66634493)
+CLTV is a fixed date, not a fresh duration beginning at confirmation. Confirmation delays can shorten the remaining wait. Reaching either condition does **not** automatically transfer the asset: the owner must sign an unlock transaction and pay its fee. This app does not expose CSV relative-time locks or CLTV block-height locks.
 
 ## Supported asset flows
 
-- **BRC-20 transfer inscription** — retains the original five-transaction Fractal flow: self-inscribe, move to the time lock, then inscribe at the time-lock address. The final inscription UTXO is script-path spent after the selected relative block count.
-- **Runes** — uses one standard Runestone transaction. A Rune `edict` assigns the requested base-unit amount to a 330-sat time-lock output. The transaction can consume one or more source UTXOs. If those inputs have an unallocated remainder or other Runes, a 330-sat Rune-change output and Runestone `pointer` return those assets to the wallet; otherwise neither is created. The locked Rune output is later spent through the same Taproot CSV script.
+- **BRC-20 transfer inscriptions:** the existing Fractal-oriented five-transaction flow—self-inscribe, send to the time-lock address, then inscribe at that address. The managed lock is the fifth transaction's output `0`, with 546 sats. This is not a generic Ordinals NFT selection tool.
+- **Runes:** one Runestone transaction assigns the requested integer base-unit amount to locked output `1`, with 330 sats. The web app always keeps a 330-sat Rune-change output at `2` and `pointer = 2`; ordinary fee change follows it.
+- **Networks available in the selector:** Bitcoin Mainnet, Testnet4, Signet, Fractal Mainnet and Fractal Testnet. Network availability in the UI is not a claim that every asset flow has been validated on every network. Bitcoin and Fractal mainnet both use `bc` addresses; the prefix cannot identify the chain.
 
-Every newly created lock also has a versioned recovery marker:
+Both unlock flows return the locked output's full satoshi value to the owner's first output; separate inputs fund the fee. Do not use unrelated asset-bearing UTXOs as fee inputs. Asset balances and ownership remain subject to the relevant chain and indexer rules.
 
-```text
-BRC-20: OP_RETURN "BATL" <version> <uint16_be(lock-blocks)> <x-only-public-key> <owner-address-type>
-```
+## Use the app
 
-For BRC-20 this is the transaction's one zero-satoshi OP_RETURN output. For Runes, the same BATL metadata is encoded as repeated unknown-odd `Nop (127)` tag fields inside the existing Runestone OP_RETURN; Runes indexers ignore those fields, so the transaction still has exactly one OP_RETURN. The owner address type preserves the information needed to restore P2TR or P2WPKH owner addresses from the x-only public key. The marker is public and contains no private key or signature. A compatible browser tool can decode it, re-derive the CSV Taproot lock address, inspect the transaction outputs, and recreate an unlock record if LocalStorage has been cleared.
+1. Connect the intended UniSat account and network. Native P2WPKH and P2TR wallet addresses are supported; P2PKH/P2SH are not.
+2. Enter your UniSat OpenAPI key in Wallet Setup. It is stored in this browser, not in the published application bundle.
+3. Open CSV or CLTV, choose the asset, amount and fee rate, and set the lock condition.
+4. For CLTV, load Chain MTP and enter a strictly later UTC target (`YYYY-MM-DD HH:mm:ss`). The initial MTP value is only a reference, not a valid future lock. Refreshing MTP does not overwrite your edited target.
+5. Review the network, original target, lock address, outputs and fee in the app and wallet before signing.
+6. Keep the local record and transaction IDs. After maturity, use the same account and network to unlock.
 
-See [the BATL protocol specification](docs/BATL-PROTOCOL.md) for the normative encoding and recovery rules.
+CSV and CLTV have separate in-tab drafts, records and results. Reloading resets unsaved drafts, not saved records. Navigation is blocked while an operation is awaiting confirmation, signing or broadcasting.
 
-Runes can be identified by either their **Rune name** or **Rune ID** (`block:transaction-index`). The app resolves a name to its canonical Rune ID with UniSat's Runes Indexer before constructing the transaction. Names are an explicit network safety check:
+### Records and interrupted BRC-20 broadcasts
 
-| Network | Rune-name alphabet |
-| --- | --- |
-| Bitcoin mainnet | uppercase (`UNCOMMONGOODS`) |
-| Fractal Bitcoin | lowercase (`fractal`) |
+BRC-20's five signed PSBTs are saved **before** the first broadcast, then submitted sequentially. `Continue Broadcast` resumes that original signed chain and target; the process is not atomic. Pending BRC-20 work blocks another BRC-20 creation for the same account/network from either workspace.
 
-Mixed case and the wrong network's alphabet are rejected before signing. Amounts and balances for Runes are raw integer base units; apply the Rune's indexed divisibility before entering them.
+Records live only in this origin's LocalStorage. Changing from the upstream site to this fork does not transfer them. Do not clear site data or operate the same record from multiple tabs. Keep an independent, private backup of records and transaction IDs; pending signed PSBTs are broadcast-capable authorization data and must not be posted publicly. There is no record-import or transaction-ID recovery UI.
 
-## Rune deposit procedure
+`locked` and `unlocked` mean the application received a broadcast result, **not** that a transaction is confirmed, mature or still unspent. The app does not continuously monitor confirmations, reorganizations or external spends.
 
-1. Connect UniSat on Bitcoin mainnet or Fractal Bitcoin.
-2. Enter either the Rune name or its Rune ID, the base-unit amount, and lock period.
-3. The app queries UniSat's Runes Indexer for canonical metadata and the address's transferable UTXOs. It uses the smallest single UTXO when possible; otherwise it automatically combines enough Rune UTXOs to cover the requested amount.
-4. Optionally select normal BTC/FB UTXOs for miner fees. The app checks selected fee inputs with the Runes Indexer; if any carry Runes, it retains a 330-sat Rune-change output and pointer to protect them.
-5. Review the PSBT. The lock output is Runestone output index `1`; recovery metadata is embedded in the Runestone at output `0`. A Rune-change output at index `2` exists only when the source UTXO(s) have Rune assets that must remain in the wallet.
-6. Sign and broadcast. After the configured relative confirmations, use the local record to unlock.
+### Explicit CLTV test unlock
 
-Never add unrelated asset UTXOs as fee inputs. A Rune UTXO may carry other Runes; the pointer intentionally returns all unallocated Rune balances to the Rune-change output.
+`Test Unlock (skip MTP)` asks for a separate confirmation on each attempt, then skips only the website's maturity precheck. It preserves the original script, target, transaction locktime, sequence, ownership checks and fees. There is no persistent bypass switch; normal `Check & Unlock` and new-lock checks remain protected. CSV has no CLTV test entry.
 
-## Network configuration
+This is a real signing and broadcast attempt, not a simulation. A mature transaction may actually spend the asset and fee. Errors identify the stage and retain the wallet's message. A signing refusal is not a node rejection; `non-final` is consistent with an unmet absolute lock, but does not establish that all later script, signature and asset checks would pass.
 
-The wallet network selector supports Bitcoin Mainnet, Testnet4, Signet, Fractal Mainnet, and Fractal Testnet. The app chooses PSBT/address parameters, API, and mempool endpoints from UniSat's current chain. Bitcoin and Fractal mainnet use the `bc` address family; all supported test networks use `tb`.
+## Validation status
 
-Copy `.env.example` to `.env` to override any OpenAPI endpoint:
+- The maintainer reports that their CSV tests passed.
+- For CLTV, a user-operated Fractal BRC-20 attempt returned `non-final` at the wallet broadcast stage after skipping the web precheck. The original public lock output was also matched to the CLTV template.
+- The repository has local synthetic transaction, record/API and browser regression tests. Historical isolated Bitcoin Core regtest and `ord` results are documented separately.
+- CLTV maturity followed by successful live unlock, confirmation and BRC-20 balance reconciliation remains outstanding. No comprehensive audit or all-network compatibility guarantee is claimed.
 
-```text
-VITE_FRACTAL_OPENAPI_BASE=https://open-api-fractal.unisat.io/v1/indexer
-VITE_BITCOIN_OPENAPI_BASE=https://open-api.unisat.io/v1/indexer
-VITE_BITCOIN_TESTNET4_OPENAPI_BASE=https://open-api-testnet4.unisat.io/v1/indexer
-VITE_BITCOIN_SIGNET_OPENAPI_BASE=https://open-api-signet.unisat.io/v1/indexer
-VITE_FRACTAL_TESTNET_OPENAPI_BASE=https://open-api-fractal-testnet.unisat.io/v1/indexer
-```
+See [validation evidence and limits](docs/VALIDATION.md) before interpreting those results or using meaningful funds.
 
-`VITE_OPENAPI_BASE` remains supported as a legacy Fractal endpoint override. Enter the UniSat OpenAPI key manually in the UI; it is stored only in the browser's LocalStorage for convenience and is never bundled into the application build.
+## Run locally
 
-## Development
+Use Node.js 24 for the documented validation setup and the committed npm lockfile.
 
 ```bash
-npm install
-npm run dev
-npm run build
+npm ci
+npm test
+npm run docs:check
+npm run dev -- --host 127.0.0.1
 ```
 
-## Security notes
+For a production build:
 
-- Verify the asset, Rune ID, correct network-case Rune name, amounts, lock address, UTXO outpoints, fee rate, and outputs in UniSat before signing.
-- Records are held in browser LocalStorage only. Save lock transaction IDs and outpoints independently.
-- The tool uses UniSat's Runes Indexer to resolve the asset and select an indexed transferable UTXO, then builds the PSBT locally. Its state can change before broadcast, so review the displayed source outpoint and the wallet's final signing preview.
-- The tool never requests seed phrases or private keys.
+```bash
+npm run build
+npm run preview -- --host 127.0.0.1
+```
 
-## License
+No API key is needed for local automated tests. The default `dev` and `preview` scripts bind all interfaces unless you override `--host` as above. Do not expose a development server unintentionally.
 
-MIT
+## Documentation and contributions
+
+- [Documentation guide](docs/index.md): where to start as a user, contributor or operator.
+- [Development and tests](docs/DEVELOPMENT.md): prerequisites, browser harness, environment settings and source map.
+- [Deploy your own instance](docs/DEPLOYMENT.md): Cloudflare Pages and optional GitHub Pages; never bundle secrets.
+- [BATL protocol](docs/BATL-PROTOCOL.md): exact v1/v2 encoding and recovery contracts.
+- [Contributing](CONTRIBUTING.md) and [security reporting](SECURITY.md): safe changes and private vulnerability reports.
+- [Architecture and recovery boundaries](docs/ARCHITECTURE.md): data flow, records, ownership and implementation limits.
+
+Keep upstream acknowledgements and license notices in redistributed copies. Report issues with this fork to this repository; do not imply that UTXO Pizza-specific behavior is supported by upstream UniSat.

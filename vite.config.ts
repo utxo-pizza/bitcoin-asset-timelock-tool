@@ -5,12 +5,16 @@ import topLevelAwait from 'vite-plugin-top-level-await'
 import { execFileSync } from 'node:child_process'
 
 function getBuildCommitHash() {
-  if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA.slice(0, 12)
-
   try {
-    return execFileSync('git', ['rev-parse', '--short=12', 'HEAD'], {
+    const commit = /^[0-9a-f]{40}$/i.test(process.env.GITHUB_SHA || '')
+      ? process.env.GITHUB_SHA!.slice(0, 12)
+      : execFileSync('git', ['rev-parse', '--short=12', 'HEAD'], {
+        encoding: 'utf8',
+      }).trim()
+    const dirty = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], {
       encoding: 'utf8',
     }).trim()
+    return dirty ? `${commit} + uncommitted changes` : commit
   } catch {
     return 'unknown'
   }

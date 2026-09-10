@@ -2,11 +2,11 @@
 
 ## Bitcoin Asset Time Lock Recovery Marker
 
-**Status:** Draft / implementation specification
+**Status:** Draft / implementation specification for the UTXO Pizza fork
 
-**Version:** 1
+**Versions:** 1 (relative blocks), 2 (absolute UTC time)
 
-`BATL` means **Bitcoin Asset Time Lock**. It is a public, versioned recovery marker for a Bitcoin asset locked by a Taproot relative block time lock. It enables an explorer, wallet, or browser-based recovery tool to recover the public parameters required to re-derive the lock address after an application's local state has been lost.
+`BATL` means **Bitcoin Asset Time Lock**. It is a public, versioned recovery marker for a Bitcoin asset locked by a Taproot time lock. It enables a compatible explorer, wallet, or recovery tool to recover the public parameters required to re-derive the lock address after an application's local state has been lost. Sections 1–8 specify the unchanged v1 format; Section 9 adds v2 without reinterpreting any v1 field.
 
 BATL does not contain private keys, signatures, seed phrases, or an unlock transaction.
 
@@ -29,12 +29,12 @@ BATL does not define a token protocol. BRC-20 transfer inscriptions and Runes Ru
 | BATL version | `1` |
 | Supported relative locks | `1`–`65535` blocks |
 | Taproot leaf version | `0xc0` |
-| Internal Taproot key | `50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0` (BIP341 NUMS key) |
+| Internal Taproot key | `50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0` (NUMS example point from BIP341) |
 | Runes Nop tag | `127` |
 
 The internal Taproot key is part of the BATL v1 address derivation. Implementations MUST use the exact value above for BATL v1 recovery.
 
-This key is the [BIP341 recommended NUMS (nothing-up-my-sleeve) internal key](https://github.com/bitcoin/bips/blob/master/bip-0341.mediawiki#constructing-and-spending-taproot-outputs). It is constructed so that no corresponding private key is known. Consequently, a BATL output has no usable Taproot key-path spend; it can only be unlocked through the committed CSV script path in Section 3. This removes a key-path bypass of the relative time lock.
+This is the [NUMS (nothing-up-my-sleeve) example point given in BIP341](https://github.com/bitcoin/bips/blob/master/bip-0341.mediawiki#constructing-and-spending-taproot-outputs). No corresponding private key is known; the intended spend path is the committed script and owner signature. BATL fixes this point for deterministic recovery, rather than following BIP341's separate randomized-internal-key privacy suggestion. Do not treat the key choice alone as a complete security guarantee.
 
 ## 3. Lock Script and Address Derivation
 
@@ -86,6 +86,8 @@ Bitcoin Script minimal pushes are used. The canonical BATL v1 script shape is th
 OP_RETURN PUSH("BATL") PUSH(0x01) PUSH(uint16_be(blocks)) PUSH(xonly_pubkey) PUSH(owner_address_type)
 ```
 
+The table describes logical field bytes, not literal push opcodes. Canonical version 1 and version 2 encode as `OP_1` (`0x51`) and `OP_2` (`0x52`) respectively under minimal Script pushes; `PUSH(0x01)` is not a requirement to emit `01 01`.
+
 ### 4.2 Owner address type
 
 BATL v1 stores an address type instead of the owner address string. Together with the x-only public key and the chain being indexed, it permits an indexer to deterministically reconstruct the original owner address.
@@ -104,14 +106,14 @@ In the final BRC-20 BATL reveal transaction:
 
 | Vout | Purpose |
 | ---: | --- |
-| `0` | Locked BRC-20 transfer inscription output |
+| `0` | Locked BRC-20 transfer inscription output, 546 sats in this implementation |
 | `1` | Zero-satoshi BATL `OP_RETURN` recovery marker |
 
-The BRC-20 transfer inscription remains at output `0`.
+The BRC-20 transfer inscription remains at output `0` of the fifth transaction in the reference application's five-transaction flow. Do not substitute the third transaction's output or another output at the same address. See the [asset flow](ARCHITECTURE.md#brc-20).
 
 ## 5. Runes Encoding
 
-Runes transactions MUST use exactly one `OP_RETURN`: the Runestone output. BATL metadata is therefore embedded inside that existing Runestone, rather than emitted as a second `OP_RETURN` output.
+BATL Rune transactions MUST use exactly one `OP_RETURN`: the Runestone output. BATL metadata is therefore embedded inside that existing Runestone, rather than emitted as a second `OP_RETURN` output.
 
 ### 5.1 Runestone Nop fields
 
@@ -128,7 +130,7 @@ Runestone fields are LEB128-encoded integer pairs. BATL v1 writes the following 
 
 Runestone integers are limited to `u128`. The 32-byte x-only public key MUST therefore be represented by two unsigned 128-bit big-endian halves. Each half MUST be left-padded to 16 bytes before concatenating `high || low` to recover the 32-byte x-only public key.
 
-All BATL Nop fields MUST appear before `Tag.Body`. A standard Runestone decoder ignores unknown odd tags, including tag `127`, so these fields do not change the interpretation of the edicts or pointer and do not create a cenotaph.
+All six BATL Nop pairs MUST be consecutive and appear before `Tag.Body`. A standard Runestone decoder ignores unknown odd tags, including tag `127`; correctly encoded BATL fields do not themselves alter the edicts/pointer or create a cenotaph. This does not guarantee that the remainder of a malformed Runestone is valid. See the [ord Runestone specification](https://docs.ordinals.com/runes/specification.html).
 
 The remaining Runestone fields are standard:
 
@@ -144,7 +146,7 @@ Tag.Body, rune_id_block_delta, rune_id_tx_delta, amount, destination_output
 | `0` | The only `OP_RETURN`: Runestone with embedded BATL Nop fields |
 | `1` | 330-satoshi BATL Rune time-lock output |
 | `2` | Optional 330-satoshi Rune change output |
-| `3+` | Optional normal BTC/FB fee change outputs |
+| After the asset outputs | Optional normal BTC/FB fee change (vout `3` when Rune change exists, otherwise potentially vout `2`) |
 
 The Rune edict assigns the locked amount to output `1`.
 
@@ -154,16 +156,16 @@ If any Rune balance must remain outside the lock, the Runestone includes `Tag.Po
 - a selected Rune UTXO carries another Rune; or
 - an additional fee input carries a Rune.
 
-If no Rune balance is left unallocated, neither the pointer nor output `2` is created.
+The lower-level builder can omit the Rune-change output and pointer if the caller establishes that no unallocated Rune balance needs that destination. This describes a builder option, not the current web interface: **the web app always reserves vout `2` with 330 sats and `pointer = 2`**, including when fee inputs are selected automatically. Omitting Rune change must not be confused with omitting a later ordinary fee-change output.
 
 ## 6. Recovery Algorithm
 
-Given a candidate transaction:
+The following is the recovery contract for compatible tooling, not a claim that the web app implements a complete recovery screen. Given a candidate transaction on an explicitly selected network:
 
 1. Locate BATL metadata:
    - for BRC-20, find a zero-satoshi output matching the Section 4 script; or
    - for Runes, find the Runestone output (`OP_RETURN OP_13`), decode its LEB128 payload, and locate the six Nop fields in Section 5.
-2. Determine the asset family from the carrier: an outer BATL OP_RETURN is BRC-20; BATL Nop fields inside a Runestone are Runes. Validate the BATL version, block count, owner address type, and 32-byte x-only public key.
+2. Interpret the BATL application's asset-family convention from the carrier: outer BATL OP_RETURN for the BRC-20 flow, or BATL Nop fields inside a Runestone for Runes. This is not proof of the asset's existence or validity. Validate version, block count, owner address type and the 32-byte x-only public key.
 3. Reconstruct the owner address using Section 4.2, then rebuild the Section 3 tapscript and Taproot address using the BATL v1 internal key.
 4. Validate that the expected locked output has the resulting P2TR script:
    - BRC-20: output `0`;
@@ -172,7 +174,7 @@ Given a candidate transaction:
 6. Create an unlock record containing the transaction ID, locked vout, asset kind, owner address, lock blocks, time-lock address, and locked output satoshi value.
 7. Build an unlock transaction with `nSequence = blocks` only after the relative lock is mature.
 
-A recovery tool SHOULD refuse to create an unlock record if the derived P2TR script does not exactly match the selected transaction output.
+A recovery tool MUST refuse to create an unlock record if the derived P2TR script does not exactly match the selected transaction output.
 
 ## 7. Compatibility and Security
 
@@ -188,6 +190,75 @@ A recovery tool SHOULD refuse to create an unlock record if the derived P2TR scr
 
 The reference TypeScript encoder and decoders are available in:
 
-- `src/lib/recovery.ts`
-- `src/lib/runestone.ts`
-- `src/lib/timelock.ts`
+- [Recovery encoders and decoders](../src/lib/recovery.ts)
+- [Runestone encoding](../src/lib/runestone.ts)
+- [Lock scripts and transaction construction](../src/lib/timelock.ts)
+
+This fork preserves the upstream v1 format and adds v2. [Core regression tests](../tests/core.test.ts) contain fixed CSV/BATL v1 examples and v2 boundary checks. See [architecture](ARCHITECTURE.md) for the difference between these primitives and the application UI.
+
+## 9. BATL v2: Absolute UTC Time
+
+BATL v2 commits to a fixed Unix timestamp, not a duration starting when the deposit confirms. A later confirmation shortens the remaining wait; it does not move the target date. The supported asset flows and output positions remain those in Sections 4.3 and 5.2. This version does not add a generic Ordinals NFT deposit flow.
+
+### 9.1 Condition and address derivation
+
+The v2 metadata condition is `lockTime`, an integer Unix second in the timestamp range of transaction `nLockTime` (`500000000` through `4294967295`, inclusive). A value below `500000000` is a block-height lock and MUST NOT be interpreted as a v2 timestamp. Representability alone is not a guarantee that a target can mature; see Section 9.4.
+
+The v2 tapscript is:
+
+```text
+<lockTime> OP_CHECKLOCKTIMEVERIFY OP_DROP <owner_xonly_pubkey> OP_CHECKSIG
+```
+
+The internal NUMS key, single-leaf construction, leaf version, owner public key and owner-address enum are unchanged from v1. The timestamp operand MUST use minimal Bitcoin Script number encoding (little-endian signed magnitude). Positive timestamps from `2147483648` onward need a fifth, zero sign byte. The four-byte big-endian recovery field below is NOT the script-number encoding.
+
+### 9.2 BRC-20 carrier
+
+The field order and output positions are unchanged. Only the version and lock field differ:
+
+```text
+OP_RETURN PUSH("BATL") PUSH(0x02) PUSH(uint32_be(lockTime)) PUSH(xonly_pubkey) PUSH(owner_address_type)
+```
+
+`lockTime` MUST occupy exactly four bytes, unsigned big-endian. V1 remains `0x01` followed by a two-byte unsigned big-endian relative block count. A decoder MUST reject an unknown version, a mismatched lock-field length or an invalid value; it MUST NOT fall back to another version.
+
+### 9.3 Rune carrier
+
+V2 retains the same six repeated Nop fields and single Runestone output:
+
+```text
+127, 0x4241544c,
+127, 2,
+127, lockTime,
+127, owner_xonly_pubkey_high,
+127, owner_xonly_pubkey_low,
+127, owner_address_type
+```
+
+The Runestone uses its normal unsigned LEB128 integer encoding, not the BRC-20 carrier's fixed-width encoding. The version determines the meaning and validation of the third value. Edicts, the pointer and any Rune-change output retain their native meanings; changing the marker version MUST NOT change their output indices or asset allocation.
+
+### 9.4 Creation, maturity and spending
+
+Creating a v2 lock commits the future condition in an output. Creation transactions retain `nLockTime = 0`: they do not themselves wait for the future CLTV target, although wallet, funding and broadcast-service acceptance still apply. The web app requires `target > fresh selected-network MTP` before creating a new lock. The reference unlock builder uses:
+
+```text
+nVersion                 = 2
+nLockTime                = lockTime
+locked-input nSequence   = 0xfffffffe
+```
+
+The non-final sequence enables transaction locktime and disables a relative BIP68 delay. The owner still signs the committed script path. [BIP65](https://github.com/bitcoin/bips/blob/master/bip-0065.mediawiki) defines the script/transaction constraints; [BIP342](https://github.com/bitcoin/bips/blob/master/bip-0342.mediawiki) retains CLTV in tapscript.
+
+Under [BIP113](https://github.com/bitcoin/bips/blob/master/bip-0113.mediawiki), a candidate block can include the unlock only when the previous tip's median-time-past (MTP) is **strictly greater** than `lockTime`. Equality is not mature. A browser clock, an API request timestamp, or the newest block's timestamp is not a substitute for MTP. A date shown in UTC is a target condition, not a promise of spendability at that wall-clock second.
+
+Normal web unlocking rechecks MTP before wallet signing. The separate, explicitly confirmed `Test Unlock (skip MTP)` action skips only that web precheck for one attempt; it does not change the script, target or transaction fields above. It is not a protocol feature that disables CLTV.
+
+[Block header time](https://developer.bitcoin.org/reference/block_chain.html#block-headers) is an unsigned 32-bit value and a new block must have time strictly greater than its predecessor's MTP. The final two representable target seconds therefore cannot have a confirming block under these rules: inclusion requires `lockTime < previous-tip MTP < new-block time <= 4294967295`. Applications MUST NOT offer such targets for new deposits. The reference application's creation limit is `4294967293` (`2106-02-07 06:28:13 UTC`); this mathematical limit does not guarantee future chain availability. The wire decoder can still identify larger representable conditions without misinterpreting them as CSV, and the UI preserves those records but does not report them as spendable.
+
+### 9.5 Recovery and compatibility
+
+Recovery follows Section 6, except that it validates and derives the v2 CLTV condition and uses MTP instead of a relative confirmation count. A recovery tool MUST verify the actual locked output, owner, network and unspent state before constructing a spend. BATL metadata does not prove asset balances, maturity, network identity or indexer acceptance.
+
+Existing v1 locks, scripts, addresses and markers remain v1. V1-only tools are not assumed to recognize v2. The reference application has encoder/decoder helpers but does not yet provide a transaction-ID recovery screen. Local record schema versions and BATL wire versions are separate: an application record version MUST NOT be used to infer the script condition.
+
+V2 has repository-level synthetic coverage and recorded historical Bitcoin Core regtest/`ord` checks. A user-operated Fractal BRC-20 premature attempt also returned `non-final` through the wallet broadcast path, with the original lock output matched separately to the CLTV template. Mature live unlock, balance-indexer reconciliation, live Runes coverage and third-party recovery support are not thereby established. See the [validation evidence and limits](VALIDATION.md) rather than treating this protocol document as an audit certificate.

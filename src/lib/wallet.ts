@@ -1,4 +1,36 @@
-import type { UnisatSignInput } from '../types'
+import { ChainType } from '../types'
+import type { TimeLockCondition, UnisatSignInput, UnisatWallet } from '../types'
+
+export type OperationIdentity = Readonly<{ ownerAddress: string; pubKey: string; chain: ChainType; lock: TimeLockCondition }>
+
+export function freezeOperationIdentity(ownerAddress: string, pubKey: string, chain: string, lock: TimeLockCondition): OperationIdentity {
+  if (!ownerAddress || !pubKey || !Object.values(ChainType).includes(chain as ChainType)) throw new Error('A known wallet account, public key and network are required.')
+  return Object.freeze({ ownerAddress, pubKey, chain: chain as ChainType, lock: Object.freeze({ ...lock }) })
+}
+
+/** Synchronous same-page gate; this does not claim cross-tab transaction isolation. */
+export function createOperationGate() {
+  let busy = false
+  return { enter: () => { if (busy) return false; busy = true; return true }, leave: () => { busy = false } }
+}
+
+/** Events invalidate even a switch away and back during one pending wallet prompt. */
+export function watchOperationIdentity(identity: OperationIdentity, provider: UnisatWallet | undefined = window.unisat) {
+  let changed = false
+  const invalidate = () => { changed = true }
+  provider?.on?.('accountsChanged', invalidate)
+  provider?.on?.('chainChanged', invalidate)
+  const assertCurrent = async () => {
+    if (!provider?.getChain || changed || (typeof window !== 'undefined' && window.unisat !== provider)) throw new Error('Wallet account or network changed (or cannot be verified). Operation stopped; saved broadcast progress was retained.')
+    const accounts = await provider.getAccounts()
+    const pubKey = await provider.getPublicKey()
+    const chain = await provider.getChain()
+    if (changed || (typeof window !== 'undefined' && window.unisat !== provider) || accounts[0] !== identity.ownerAddress || pubKey.trim().toLowerCase() !== identity.pubKey.toLowerCase() || chain.enum !== identity.chain) {
+      throw new Error('Wallet account, public key or network changed. Operation stopped; saved broadcast progress was retained.')
+    }
+  }
+  return { assertCurrent, dispose: () => { provider?.removeListener?.('accountsChanged', invalidate); provider?.removeListener?.('chainChanged', invalidate) } }
+}
 
 function extractWalletError(error: unknown): string {
   if (error instanceof Error && error.message) return error.message
@@ -42,6 +74,7 @@ function unwrapSignedPsbt(result: unknown): string {
 export async function signPsbtCompat(
   psbtHex: string,
   options?: { autoFinalized?: boolean; toSignInputs?: UnisatSignInput[] },
+  beforeSign?: () => Promise<void>,
 ): Promise<string> {
   const signer = window.unisat?.signPsbt
   if (!signer) {
@@ -49,16 +82,18 @@ export async function signPsbtCompat(
   }
 
   try {
-    const result = await signer(psbtHex, options)
+    await beforeSign?.()
+    const result = await signer.call(window.unisat, psbtHex, options)
     return unwrapSignedPsbt(result)
   } catch (error) {
     if (!isPsbtHexRequiredError(error)) {
       throw error
     }
 
+    await beforeSign?.()
     const result = await (signer as unknown as (
       payload: { psbtHex: string; options?: { autoFinalized?: boolean; toSignInputs?: UnisatSignInput[] } },
-    ) => Promise<unknown>)({
+    ) => Promise<unknown>).call(window.unisat, {
       psbtHex,
       options,
     })
@@ -69,6 +104,7 @@ export async function signPsbtCompat(
 export async function signPsbtsCompat(
   psbtHexs: string[],
   options: { autoFinalized?: boolean; toSignInputs?: UnisatSignInput[] }[],
+  assertCurrent?: () => Promise<void>,
 ): Promise<string[]> {
   if (psbtHexs.length !== options.length) {
     throw new Error('Each PSBT requires its own signing options.')
@@ -77,12 +113,13 @@ export async function signPsbtsCompat(
   if (!batchSigner) {
     const signed: string[] = []
     for (let index = 0; index < psbtHexs.length; index += 1) {
-      signed.push(await signPsbtCompat(psbtHexs[index], options[index]))
+      signed.push(await signPsbtCompat(psbtHexs[index], options[index], assertCurrent))
     }
     return signed
   }
 
-  const result = await batchSigner(psbtHexs, options)
+  await assertCurrent?.()
+  const result = await batchSigner.call(window.unisat, psbtHexs, options)
   if (!Array.isArray(result) || result.length !== psbtHexs.length) {
     throw new Error('The wallet returned an invalid batch PSBT signing response.')
   }

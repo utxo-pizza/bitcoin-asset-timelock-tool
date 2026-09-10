@@ -135,7 +135,12 @@ export type ResultState =
 /** BIP-68 block-based relative lock value (nSequence low 16 bits). */
 export type TimeLockBlocks = number
 
-export type TimeLockRecord = {
+/** CSV is relative to confirmation; CLTV commits to a fixed UTC Unix second. */
+export type TimeLockCondition =
+  | { kind: 'csv_blocks'; blocks: TimeLockBlocks }
+  | { kind: 'cltv_time'; timestamp: number }
+
+export type TimeLockRecordFields = {
   id: string
   ownerAddress: string
   chain?: ChainType | string
@@ -144,7 +149,6 @@ export type TimeLockRecord = {
   amount: string
   runeId?: string
   runeName?: string
-  lockBlocks: TimeLockBlocks
   timeLockAddress: string
   createdAt: string
   commitTxid: string
@@ -164,6 +168,23 @@ export type TimeLockRecord = {
   pendingPsbts?: string[]
   unlockTxid?: string
 }
+
+/** Legacy records remain in their original namespace and retain their exact shape. */
+export type LegacyTimeLockRecord = TimeLockRecordFields & {
+  recordVersion?: never
+  lockBlocks: TimeLockBlocks
+  lock?: never
+}
+
+export type Version2TimeLockRecord = TimeLockRecordFields & {
+  recordVersion: 2
+  chain: ChainType
+  ownerPubKey: string
+  lock: TimeLockCondition
+  lockBlocks?: never
+}
+
+export type TimeLockRecord = LegacyTimeLockRecord | Version2TimeLockRecord
 
 export type BuiltTimeLockUnlockTx = {
   kind: 'timelock_unlock'

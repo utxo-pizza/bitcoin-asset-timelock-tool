@@ -12,5 +12,28 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+.ui-artifacts/
 
 .ignore.*
+
+# Local indexes, tooling and generated reports
+/codestable/
+.codegraph/
+codegraph.json
+.codex/
+.wrangler/
+.cache/
+coverage/
+tmp/
+playwright-report/
+test-results/
+*.log
+
+# Credentials and local authorization material
+auth.json
+credentials.json
+cookies.txt
+*.pem
+*.key
+*.p12
+*.pfx
