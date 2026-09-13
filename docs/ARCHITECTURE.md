@@ -8,7 +8,7 @@ The application coordinates a browser, UniSat, the selected chain and asset inde
 Browser: choose asset/condition → build transaction → request wallet approval
    │                                  │
    ├─ OpenAPI: chain MTP, balances, UTXOs and fees
-   ├─ LocalStorage: key, records, pending signed BRC-20 chain
+   ├─ LocalStorage: API key, records, public references, pending signed BRC-20 chain
    └─ UniSat: sign → submit to its broadcast service
                          │
                          └─ Chain validation + asset indexing decide the result
@@ -35,7 +35,7 @@ CLTV input is interpreted as UTC, not browser-local time. Creating a new lock re
 
 The untouched CLTV date field starts at MTP as a reference; it adds no default duration. User edits, clearing and invalid text are preserved across MTP refreshes. New deposits reject the last two representable uint32 timestamps; raw recovery and existing records preserve them without calling them mature. [BATL's timestamp rules](BATL-PROTOCOL.md#94-creation-maturity-and-spending) explain the boundary.
 
-`Test Unlock (skip MTP)` adds a one-attempt confirmation before bypassing only the web precheck. It does not persist a flag, change the script/PSBT or bypass identity checks. It may actually unlock an already-mature output. See [validation](VALIDATION.md#interpreting-the-fractal-result) for how to interpret errors.
+`Test Unlock (skip MTP)` on original local CLTV records adds a one-attempt confirmation before bypassing only the web precheck. It does not persist a flag, change the script/PSBT or bypass identity checks. Recovered references always use the protected maturity check. The test action may actually unlock an already-mature output. See [validation](VALIDATION.md#interpreting-the-fractal-result) for how to interpret errors.
 
 ## How assets enter the lock
 
@@ -88,7 +88,13 @@ BATL carries a version, lock condition, owner x-only public key and address type
 
 The public recovery panel accepts a lock transaction ID, a strict public JSON file/text, or an inscription containing that JSON. It selects an explicit chain, recomputes the raw transaction ID, checks a unique supported BATL carrier, and matches the derived script against the actual output. Initial imports restore public references only; a separate check loads confirmation, unspent and asset information. It does not fabricate original creation times, asset amounts, five-transaction history or pending signed PSBTs.
 
+The recovery confirmation check combines separately sampled API replies. It requires the transaction and exact output to report the same positive confirmed height, at or below the chain snapshot, and a positive reported confirmation count. The displayed count is derived from that snapshot; it need not equal a count returned at a different time by another endpoint.
+
+Runes and BRC-20 indexes must cover the particular output's confirmed creation height. They need not reach an unrelated newer chain tip. The blockchain output check separately requires the same outpoint, script, value and address to be explicitly unspent, and the complete inscription/Rune inventories must satisfy the supported asset flow. Fee UTXOs use the same confirmation and per-output Runes coverage rules. These checks still rely on indexer consistency across requests.
+
 Recovered references use the independent `bitcoin_asset_timelock_recovered_v1` namespace. It stores public outpoints, workspace/source, restoration time and an optional unlock-attempt ID, not a trusted asset-state cache. Malformed data is preserved and prevents writes. Compare-before-write guards catch some stale updates but do not provide cross-tab transactions.
+
+Verification results remain in the current session and expire after 60 seconds. Wallet, network, API-key, workspace and observed storage changes invalidate previous checks; connect the intended wallet before verifying for an unlock. `verified` describes indexed output/assets; owner, network and lock maturity are additional conditions for enabling the review button. See the [recovery operating steps and blocked states](PUBLIC-BACKUP.md#if-review-recovered-unlock-is-disabled).
 
 New recovered unlocks recheck the output, indexer completeness, ownership, maturity and selected fee inputs before signing and before broadcast. The existing builder preserves the original condition and returns the principal to the owner. The wallet result must keep every unsigned transaction byte and prevout unchanged, finalize every input, use ALL/DEFAULT signature coverage, and pass signature verification. The attempt ID is saved before broadcast; it means an attempt, not confirmation. Uncertain submissions require checking that ID before any explicit retry.
 

@@ -40,6 +40,8 @@ See the [BATL contract](docs/BATL-PROTOCOL.md) and [architecture](docs/ARCHITECT
 
 Update usage, protocol and validation documentation whenever behavior changes. Separate reproducible repository tests, maintainer-reported external checks and outstanding acceptance work. Do not claim an audit or blanket network support from a successful synthetic test.
 
+Record user-visible additions and fixes in the [fork changelog](docs/CHANGELOG.md), link operating steps from the README, and keep [validation evidence](docs/VALIDATION.md) current when a maintainer reports a retest. State which stage was confirmed: import/verification, signing, broadcast, transaction confirmation or asset balances. For Markdown-only changes, run `npm run docs:check` and check claims against the relevant source and recorded results; do not relabel historical test runs as newly executed.
+
 Before publication, inspect the complete proposed commit—including new files—for secrets, personal data, generated artifacts and machine-specific paths. Check dependencies and license notices separately. `docs:check` validates local documentation links; it is not a secret scanner or security audit.
 
 Forks should use their own repository and site links while retaining upstream attribution and legal notices. CI checks source; it does not publish to Cloudflare. GitHub Pages deployment is an explicit, optional manual workflow described in [deployment](docs/DEPLOYMENT.md).

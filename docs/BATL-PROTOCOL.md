@@ -193,8 +193,13 @@ The reference TypeScript encoder and decoders are available in:
 - [Recovery encoders and decoders](../src/lib/recovery.ts)
 - [Runestone encoding](../src/lib/runestone.ts)
 - [Lock scripts and transaction construction](../src/lib/timelock.ts)
+- [Public recovery directory format](../src/lib/recovery-manifest.ts)
+- [Current output and asset verification](../src/lib/recovery-chain.ts)
+- [Recovered unlock execution](../src/lib/recovery-unlock.ts) and [signed transaction checks](../src/lib/signed-transaction.ts)
 
 This fork preserves the upstream v1 format and adds v2. [Core regression tests](../tests/core.test.ts) contain fixed CSV/BATL v1 examples and v2 boundary checks. See [architecture](ARCHITECTURE.md) for the difference between these primitives and the application UI.
+
+The application also implements the separate `batl-recovery` JSON directory described in the [public backup guide](PUBLIC-BACKUP.md#public-file-format). Its version `1` names the directory format and can reference either BATL v1 CSV or BATL v2 CLTV outputs; the UI handles one lock workspace per import. The directory contains only network/outpoint pointers. The original transaction supplies the BATL parameters, and its output script continues to enforce the original owner and lock condition.
 
 ## 9. BATL v2: Absolute UTC Time
 
@@ -251,7 +256,7 @@ The non-final sequence enables transaction locktime and disables a relative BIP6
 
 Under [BIP113](https://github.com/bitcoin/bips/blob/master/bip-0113.mediawiki), a candidate block can include the unlock only when the previous tip's median-time-past (MTP) is **strictly greater** than `lockTime`. Equality is not mature. A browser clock, an API request timestamp, or the newest block's timestamp is not a substitute for MTP. A date shown in UTC is a target condition, not a promise of spendability at that wall-clock second.
 
-Normal web unlocking rechecks MTP before wallet signing. The separate, explicitly confirmed `Test Unlock (skip MTP)` action skips only that web precheck for one attempt; it does not change the script, target or transaction fields above. It is not a protocol feature that disables CLTV.
+Normal web unlocking rechecks MTP before wallet signing. The separate, explicitly confirmed `Test Unlock (skip MTP)` action for original local CLTV records skips only that web precheck for one attempt; it does not change the script, target or transaction fields above. Recovered references do not expose that action. It is not a protocol feature that disables CLTV.
 
 [Block header time](https://developer.bitcoin.org/reference/block_chain.html#block-headers) is an unsigned 32-bit value and a new block must have time strictly greater than its predecessor's MTP. The final two representable target seconds therefore cannot have a confirming block under these rules: inclusion requires `lockTime < previous-tip MTP < new-block time <= 4294967295`. Applications MUST NOT offer such targets for new deposits. The reference application's creation limit is `4294967293` (`2106-02-07 06:28:13 UTC`); this mathematical limit does not guarantee future chain availability. The wire decoder can still identify larger representable conditions without misinterpreting them as CSV, and the UI preserves those records but does not report them as spendable.
 

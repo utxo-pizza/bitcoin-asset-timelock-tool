@@ -6,7 +6,7 @@ This fork is a static React/TypeScript application: there is no project-owned ba
 
 The package declares Node.js `^20.19.0 || >=22.12.0`. The current validation environment uses Node.js 24; CI uses Node.js 24 as well. Use the committed `package-lock.json` rather than resolving a fresh dependency tree.
 
-The package version is retained from upstream; a source commit identifies this fork's current development snapshot. Historical upstream tags do not identify the new CLTV changes. `private: true` prevents accidental npm package publication; it does not make the GitHub repository or MIT-licensed source private.
+The package version is retained from upstream; a source commit identifies this fork's current development snapshot. Historical upstream tags do not identify the fork's CLTV or public recovery changes; see the [fork changelog](CHANGELOG.md). `private: true` prevents accidental npm package publication; it does not make the GitHub repository or MIT-licensed source private.
 
 ```bash
 git clone https://github.com/utxo-pizza/bitcoin-asset-timelock-tool.git
@@ -35,6 +35,8 @@ npx tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution Bun
 ```
 
 Vite currently reports dependency `stream`/`events` externalization and a large JavaScript chunk. Record warnings honestly; do not equate a successful bundle with wallet, consensus or asset-indexer acceptance.
+
+The [recovery chain regressions](../tests/recovery-chain.test.ts) cover the Fractal failures fixed on 2026-09-13: confirmation counts may differ across separate API snapshots, and an asset index may trail the chain tip while covering the exact output. The synthetic case with chain tip 120, output height 100 and index height 100 passes; index height 99 remains insufficient. [Recovered unlock tests](../tests/recovery-unlock.test.ts) separately require strict maturity and revalidate before signing and broadcast.
 
 ## Browser integration tests
 

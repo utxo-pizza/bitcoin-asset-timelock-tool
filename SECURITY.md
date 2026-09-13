@@ -15,7 +15,7 @@ Never include seed phrases, private keys, API keys, cookies, browser storage exp
 - The browser loads executable JavaScript and depends on its hosting origin, wallet extension, dependencies and configured API services. This application never asks for a seed phrase or private key.
 - OpenAPI keys and local records are stored in origin-specific LocalStorage, not encrypted backup storage. Pending BRC-20 records contain signed transactions that can be broadcast; protect them accordingly.
 - The same `bc` address prefix does not distinguish Bitcoin from Fractal. Review the wallet's actual network before signing. Configured API endpoints are trusted for chain metadata and asset selection, not independently authenticated as a particular chain by a response string.
-- Lock maturity is enforced by transaction/script rules. Web prechecks reduce mistakes but are not the on-chain lock. CLTV test unlock skips only one web precheck after explicit confirmation; it does not modify the original CLTV condition.
+- Lock maturity is enforced by transaction/script rules. Web prechecks reduce mistakes but are not the on-chain lock. The test action on original local CLTV records skips only one web precheck after explicit confirmation; recovered references retain the maturity check. Neither public recovery data nor the test action modifies the original CLTV condition.
 - A wallet/API rejection does not establish that every subsequent transaction or asset check would pass. A transaction ID or local `unlocked` status is not confirmation.
 - Public recovery files contain only network/outpoint pointers. Their contents, inscription ownership and local cached verification never authorize a spend. Recovery rederives the actual BATL output and requires the original wallet key; never inscribe a storage dump, private key or signed transaction.
 - Recovered unlocks check current output/asset data, maturity, wallet identity and the exact signed transaction, accepting only ALL or Taproot DEFAULT signatures. These checks are not an independent consensus or asset-indexer audit. Older local-record unlock flows have not been rewritten to use this new recovery pipeline.
@@ -26,5 +26,7 @@ Never include seed phrases, private keys, API keys, cookies, browser storage exp
 ## Validation and supported versions
 
 Read the [validation matrix](docs/VALIDATION.md) for the exact evidence available. Maintainer-reported CSV success and a Fractal CLTV `non-final` result are not a blanket audit or compatibility guarantee. No security-support schedule or long-term release policy has been published; include the exact revision when reporting a problem.
+
+The [2026-09-13 recovery retest](docs/VALIDATION.md#fractal-recovery-retest--2026-09-13) records the maintainer's resolution report for the disabled-review issue. That report is separate from a confirmed unlock transaction and asset-balance reconciliation. Keep that distinction when describing recovery support.
 
 This policy does not authorize active security testing of the live site, public networks or third-party services.

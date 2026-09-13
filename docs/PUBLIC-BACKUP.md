@@ -1,6 +1,6 @@
 # Public backup and recovery
 
-> This feature was deployed to the [live app](https://timelock-tool.utxo.pizza/) on 2026-09-13. Deployment and local synthetic verification do not replace user-operated live-wallet, inscription and mature-unlock acceptance testing.
+> Available in both workspaces of the [live app](https://timelock-tool.utxo.pizza/). The 2026-09-13 Fractal confirmation/indexer fixes and the maintainer's successful retest of the reported recovery issue are recorded in [validation evidence](VALIDATION.md#fractal-recovery-retest--2026-09-13).
 
 A public backup is an index of existing locks, not a private-key backup or an authorization to spend. The original BATL data already lives in the lock transaction. A separate inscription preserves a convenient directory of those transaction outputs.
 
@@ -24,11 +24,33 @@ Configure an OpenAPI key, select the original network and open the matching CSV/
 
 The app exports and imports one lock workspace at a time. A mixed CSV/CLTV directory must be split into separate files; importing it does not silently save only a subset. Existing original records are not duplicated or migrated.
 
-The app recomputes the raw transaction ID, decodes a unique supported BATL marker and matches the actual lock script/output. It saves a separate public reference, not a fabricated copy of the old application record. Initial imports do not assert that assets are valid or spendable. Use the explicit verification action to query current output and asset data.
+The app recomputes the raw transaction ID, decodes a unique supported BATL marker and matches the actual lock script/output. It saves a separate public reference, not a fabricated copy of the old application record. Initial imports do not assert that assets are valid or spendable.
 
-To unlock, connect the original key/account, address type and network, then review the recovered unlock after maturity. The principal returns to the owner's first output, and separately verified inputs cover the fee. The confirmation lists transaction details and requires checking that fee funds contain no assets from other protocols.
+1. Select `Restore records`. The imported references appear under `Recovered CSV references` or `Recovered CLTV references`.
+2. Before reviewing an unlock, connect the original wallet key/account, address type and network. Connecting or changing the wallet invalidates earlier verification results; reading/importing references itself needs no wallet connection.
+3. Click `Verify recovered record` on **each** reference to load its current output and asset state. Batch import does not automatically run this check for every row. `Last checked: verified` establishes the indexed output and asset check; wallet ownership and maturity are checked separately.
+4. When those checks are fresh and the lock is mature, click `Review recovered unlock`. Review the network, owner return address, full principal, every fee input and every output. Acknowledge the fee-input check before selecting `Confirm recovered signing`.
+
+The principal returns to the owner's first output, and separately verified inputs cover the fee. The app rechecks the output, assets, fee inputs, identity and maturity before signing and broadcasting. A successful wallet response still needs a confirmation and asset-balance check on the original network.
 
 A saved unlock-attempt ID is not confirmation. If broadcasting fails or its result is uncertain, inspect that transaction before explicitly reviewing a retry. There is no automatic retry or maturity-bypass entry in the recovery flow.
+
+### If Review recovered unlock is disabled
+
+Read the reason printed on that reference's card. Passing the target's wall-clock time alone cannot enable the button.
+
+| Card state or reason | Next action |
+| --- | --- |
+| Not checked in this session, or just imported | Click `Verify recovered record` for that row. Reloading keeps the reference but discards its session check. |
+| `Last checked: unknown` or assets not verified | Read the accompanying cause. Refresh verification when the required confirmation/indexer data becomes available; re-importing the same JSON does not repair missing evidence. |
+| Indexer has not reached the recovered output height | Wait for it to cover that output's creation height, then Verify again. An indexer may trail the latest chain tip and still pass this check. |
+| `Last checked: spent` | Inspect the original-network transaction and any pending spend before attempting anything else. The reference cannot authorize another spend. |
+| Check is stale | Verify again; output and maturity snapshots have a 60-second validity window. |
+| Wallet disconnected, wrong owner or wrong network | Connect the original account/address type on the original chain, then Verify again. Selecting a recovery network does not switch the wallet. |
+| Fixed-date lock is not mature, or relative lock lacks confirmed block age | Wait for Chain MTP to be strictly after the CLTV target, or for the CSV block age to be sufficient, then Verify again. |
+| Local records are damaged or another operation is in progress | Preserve the existing site data and resolve the reported storage problem, or let the current operation finish. |
+
+After a same-origin site update, reload or hard-refresh the page, reconnect the original wallet, and Verify the existing rows. Wallet, network, API-key or workspace changes also invalidate previous checks. Do not clear site data or re-import references just to update the application. The old `Unconfirmed or inconsistent transaction height/confirmations` and `Runes indexer is behind the chain snapshot` false rejections were corrected in the [2026-09-13 changes](CHANGELOG.md#2026-09-13--public-backup-and-recovery).
 
 ## Public file format
 

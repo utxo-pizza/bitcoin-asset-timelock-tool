@@ -4,7 +4,7 @@ A browser-based tool for locking BRC-20 transfer inscriptions and Runes in Tapro
 
 [Open the live app](https://timelock-tool.utxo.pizza/) · [CSV relative blocks](https://timelock-tool.utxo.pizza/#/csv) · [CLTV fixed UTC date](https://timelock-tool.utxo.pizza/#/cltv)
 
-> Public backup and recovery is deployed to the linked live app as of 2026-09-13. It remains dependent on the selected APIs/indexers and still needs user-operated live-wallet, inscription and mature-unlock acceptance testing.
+> Public backup and recovery is live in both workspaces. See the [recovery guide](docs/PUBLIC-BACKUP.md), [fork changes](docs/CHANGELOG.md), and [validation status](docs/VALIDATION.md), including the maintainer's 2026-09-13 Fractal recovery retest.
 
 This is the **UTXO Pizza community-maintained fork** of [UniSat's Bitcoin Asset Time Lock](https://github.com/unisat-wallet/bitcoin-asset-timelock-tool). It adds fixed-date CLTV locks, separate workspaces, Chain MTP-based date handling, public recovery files and inscription-based recovery, stricter record and operation checks, and regression tests. It is not an official UniSat deployment or an independently audited custody product. The original [MIT license and copyright notice](LICENSE) are preserved.
 
@@ -54,13 +54,13 @@ Use **Public backup & recovery** in the relevant CSV or CLTV workspace. A public
 1. Select references on the original network, review the JSON, and download the file. Verify the original lock and its confirmations before paying to inscribe.
 2. To archive it on-chain, personally inscribe that file with UniSat on the **same network**, using ordinary fee funds and your own receiving address. The app does not place or pay for an inscription order. Downloading a file is not an on-chain backup.
 3. Keep the backup inscription ID separately. After losing local records, restore from the original lock transaction ID, the public JSON file/text, or the backup inscription ID.
-4. Verify the recovered output and assets, then use the original wallet key/address type and network to review an unlock after maturity. Unknown, incomplete or spent outputs cannot proceed.
+4. Connect the original wallet key/address type on the original network, then click `Verify recovered record` on each imported reference. Once its check is `verified` and fresh and the lock is mature, select `Review recovered unlock`. Importing alone does not enable spending; the card explains any remaining block. See [disabled-button troubleshooting](docs/PUBLIC-BACKUP.md#if-review-recovered-unlock-is-disabled).
 
 The original lock still requires its owner's signature. Owning or copying a backup inscription does not transfer that authority. Recovery depends on historical transaction access and supported indexers; it is not a private-key backup, automatic wallet-wide discovery, or an unconditional permanence guarantee. See the [public backup guide and format](docs/PUBLIC-BACKUP.md).
 
 ### Explicit CLTV test unlock
 
-`Test Unlock (skip MTP)` asks for a separate confirmation on each attempt, then skips only the website's maturity precheck. It preserves the original script, target, transaction locktime, sequence, ownership checks and fees. There is no persistent bypass switch; normal `Check & Unlock` and new-lock checks remain protected. CSV has no CLTV test entry.
+`Test Unlock (skip MTP)` is available for original local CLTV records. It asks for a separate confirmation on each attempt, then skips only the website's maturity precheck. It preserves the original script, target, transaction locktime, sequence, ownership checks and fees. There is no persistent bypass switch; normal `Check & Unlock` and new-lock checks remain protected. CSV and recovered references have no CLTV test entry.
 
 This is a real signing and broadcast attempt, not a simulation. A mature transaction may actually spend the asset and fee. Errors identify the stage and retain the wallet's message. A signing refusal is not a node rejection; `non-final` is consistent with an unmet absolute lock, but does not establish that all later script, signature and asset checks would pass.
 
@@ -68,8 +68,9 @@ This is a real signing and broadcast attempt, not a simulation. A mature transac
 
 - The maintainer reports that their CSV tests passed.
 - For CLTV, a user-operated Fractal BRC-20 attempt returned `non-final` at the wallet broadcast stage after skipping the web precheck. The original public lock output was also matched to the CLTV template.
+- On 2026-09-13, the maintainer confirmed that the reported disabled-review problem for imported Fractal CLTV references was resolved after the confirmation and asset-indexer checks were corrected.
 - The repository has local synthetic transaction, record/API and browser regression tests. Historical isolated Bitcoin Core regtest and `ord` results are documented separately.
-- CLTV maturity followed by successful live unlock, confirmation and BRC-20 balance reconciliation remains outstanding. No comprehensive audit or all-network compatibility guarantee is claimed.
+- The recovery retest report did not include an unlock transaction confirmation or final BRC-20 balance reconciliation. Those stages and wider network/asset coverage remain to be recorded in the [validation evidence](docs/VALIDATION.md#outstanding-acceptance).
 
 See [validation evidence and limits](docs/VALIDATION.md) before interpreting those results or using meaningful funds.
 
@@ -96,6 +97,8 @@ No API key is needed for local automated tests. The default `dev` and `preview` 
 ## Documentation and contributions
 
 - [Documentation guide](docs/index.md): where to start as a user, contributor or operator.
+- [Fork changelog](docs/CHANGELOG.md): CLTV additions, public recovery and Fractal verification fixes.
+- [Public backup and recovery](docs/PUBLIC-BACKUP.md): export, inscription, restore, verification and disabled-button troubleshooting.
 - [Development and tests](docs/DEVELOPMENT.md): prerequisites, browser harness, environment settings and source map.
 - [Deploy your own instance](docs/DEPLOYMENT.md): Cloudflare Pages and optional GitHub Pages; never bundle secrets.
 - [BATL protocol](docs/BATL-PROTOCOL.md): exact v1/v2 encoding and recovery contracts.
