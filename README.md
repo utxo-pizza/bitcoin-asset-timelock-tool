@@ -4,7 +4,9 @@ A browser-based tool for locking BRC-20 transfer inscriptions and Runes in Tapro
 
 [Open the live app](https://timelock-tool.utxo.pizza/) · [CSV relative blocks](https://timelock-tool.utxo.pizza/#/csv) · [CLTV fixed UTC date](https://timelock-tool.utxo.pizza/#/cltv)
 
-This is the **UTXO Pizza community-maintained fork** of [UniSat's Bitcoin Asset Time Lock](https://github.com/unisat-wallet/bitcoin-asset-timelock-tool). It adds fixed-date CLTV locks, separate workspaces, Chain MTP-based date handling, stricter record and operation checks, and regression tests. It is not an official UniSat deployment or an independently audited custody product. The original [MIT license and copyright notice](LICENSE) are preserved.
+> Public backup and recovery is deployed to the linked live app as of 2026-09-13. It remains dependent on the selected APIs/indexers and still needs user-operated live-wallet, inscription and mature-unlock acceptance testing.
+
+This is the **UTXO Pizza community-maintained fork** of [UniSat's Bitcoin Asset Time Lock](https://github.com/unisat-wallet/bitcoin-asset-timelock-tool). It adds fixed-date CLTV locks, separate workspaces, Chain MTP-based date handling, public recovery files and inscription-based recovery, stricter record and operation checks, and regression tests. It is not an official UniSat deployment or an independently audited custody product. The original [MIT license and copyright notice](LICENSE) are preserved.
 
 ## Choose the right lock
 
@@ -41,9 +43,20 @@ CSV and CLTV have separate in-tab drafts, records and results. Reloading resets 
 
 BRC-20's five signed PSBTs are saved **before** the first broadcast, then submitted sequentially. `Continue Broadcast` resumes that original signed chain and target; the process is not atomic. Pending BRC-20 work blocks another BRC-20 creation for the same account/network from either workspace.
 
-Records live only in this origin's LocalStorage. Changing from the upstream site to this fork does not transfer them. Do not clear site data or operate the same record from multiple tabs. Keep an independent, private backup of records and transaction IDs; pending signed PSBTs are broadcast-capable authorization data and must not be posted publicly. There is no record-import or transaction-ID recovery UI.
+Detailed records live in this origin's LocalStorage. Changing sites does not transfer them. Public recovery below can locate existing BATL outputs, but cannot restore an unfinished five-transaction chain or its signed PSBTs. Do not clear site data or operate the same record from multiple tabs. Pending signed PSBTs are broadcast-capable authorization data and must not be posted publicly.
 
 `locked` and `unlocked` mean the application received a broadcast result, **not** that a transaction is confirmed, mature or still unspent. The app does not continuously monitor confirmations, reorganizations or external spends.
+
+### Public backup and recovery
+
+Use **Public backup & recovery** in the relevant CSV or CLTV workspace. A public recovery file contains only its format/version, the network and up to 20 locked outpoints; no private keys, API keys, signatures or full local records are exported.
+
+1. Select references on the original network, review the JSON, and download the file. Verify the original lock and its confirmations before paying to inscribe.
+2. To archive it on-chain, personally inscribe that file with UniSat on the **same network**, using ordinary fee funds and your own receiving address. The app does not place or pay for an inscription order. Downloading a file is not an on-chain backup.
+3. Keep the backup inscription ID separately. After losing local records, restore from the original lock transaction ID, the public JSON file/text, or the backup inscription ID.
+4. Verify the recovered output and assets, then use the original wallet key/address type and network to review an unlock after maturity. Unknown, incomplete or spent outputs cannot proceed.
+
+The original lock still requires its owner's signature. Owning or copying a backup inscription does not transfer that authority. Recovery depends on historical transaction access and supported indexers; it is not a private-key backup, automatic wallet-wide discovery, or an unconditional permanence guarantee. See the [public backup guide and format](docs/PUBLIC-BACKUP.md).
 
 ### Explicit CLTV test unlock
 

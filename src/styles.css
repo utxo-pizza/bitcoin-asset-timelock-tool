@@ -210,8 +210,32 @@ input {
 .workspace-navigation-status { flex-basis: 100%; color: #667085; font-size: 12px; }
 .lock-workspace .ant-alert-description { overflow-wrap: anywhere; }
 .cltv-unlock-test-confirm { overflow-wrap: anywhere; }
+.recovery-panel { min-width: 0; }
+.recovery-panel .ant-typography-secondary { color: #667085; }
+.recovery-panel .ant-card-head-title { white-space: normal; padding-block: 12px; }
+.recovery-panel section, .recovery-section, .recovery-record-body { min-width: 0; }
+.recovery-tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
+.recovery-section h5.ant-typography { margin-top: 0; }
+.recovery-selection { border: 0; margin: 0; padding: 0; display: grid; gap: 10px; max-height: 260px; overflow: auto; }
+.recovery-selection legend { float: left; width: 100%; }
+.recovery-selection .ant-checkbox-wrapper { margin: 0; align-items: flex-start; overflow-wrap: anywhere; }
+.recovery-record { display: grid; gap: 14px; width: 100%; min-width: 0; }
+.recovery-record-actions { justify-content: flex-end; }
+.recovery-outpoint { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.recovery-feedback, .recovery-record, .recovery-confirmation { overflow-wrap: anywhere; }
+.recovery-panel input[type="file"] { display: block; width: 100%; min-width: 0; font-size: 12px; }
+.recovery-panel textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.recovery-transaction-list { padding-left: 22px; margin: 8px 0 0; }
+.recovery-transaction-list li + li { margin-top: 10px; }
+.recovery-confirmation .ant-descriptions-item-label { width: 150px; }
+.recovery-confirmation .ant-modal-body { max-height: 68vh; overflow-y: auto; }
 
 @media (max-width: 640px) {
+  .recovery-tools { grid-template-columns: 1fr; gap: 24px; }
+  .recovery-record-actions { justify-content: flex-start; }
+  .recovery-record-actions .ant-btn { white-space: normal; height: auto; min-height: 34px; }
+  .recovery-confirmation .ant-descriptions-item-label { width: 98px; }
+  .recovery-confirmation .ant-modal-footer .ant-btn { margin: 6px 0 0; width: 100%; }
   .workspace-navigation { gap: 8px; }
   .workspace-navigation a { flex: 1; flex-direction: column; gap: 2px; padding: 10px 12px; }
   .workspace-navigation a span { font-size: 12px; }

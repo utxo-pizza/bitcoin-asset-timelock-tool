@@ -160,7 +160,7 @@ The lower-level builder can omit the Rune-change output and pointer if the calle
 
 ## 6. Recovery Algorithm
 
-The following is the recovery contract for compatible tooling, not a claim that the web app implements a complete recovery screen. Given a candidate transaction on an explicitly selected network:
+The following is the recovery contract for compatible tooling. The reference application's supported recovery subset and indexer checks are described in the [public recovery guide](PUBLIC-BACKUP.md). Given a candidate transaction on an explicitly selected network:
 
 1. Locate BATL metadata:
    - for BRC-20, find a zero-satoshi output matching the Section 4 script; or
@@ -259,6 +259,6 @@ Normal web unlocking rechecks MTP before wallet signing. The separate, explicitl
 
 Recovery follows Section 6, except that it validates and derives the v2 CLTV condition and uses MTP instead of a relative confirmation count. A recovery tool MUST verify the actual locked output, owner, network and unspent state before constructing a spend. BATL metadata does not prove asset balances, maturity, network identity or indexer acceptance.
 
-Existing v1 locks, scripts, addresses and markers remain v1. V1-only tools are not assumed to recognize v2. The reference application has encoder/decoder helpers but does not yet provide a transaction-ID recovery screen. Local record schema versions and BATL wire versions are separate: an application record version MUST NOT be used to infer the script condition.
+Existing v1 locks, scripts, addresses and markers remain v1. V1-only tools are not assumed to recognize v2. The reference application supports transaction-ID and public-file/inscription recovery for its supported output templates. This does not restore the original five-transaction application history. Local record versions, public recovery-file versions and BATL wire versions are separate: a file or record version MUST NOT be used to infer the script condition.
 
 V2 has repository-level synthetic coverage and recorded historical Bitcoin Core regtest/`ord` checks. A user-operated Fractal BRC-20 premature attempt also returned `non-final` through the wallet broadcast path, with the original lock output matched separately to the CLTV template. Mature live unlock, balance-indexer reconciliation, live Runes coverage and third-party recovery support are not thereby established. See the [validation evidence and limits](VALIDATION.md) rather than treating this protocol document as an audit certificate.

@@ -8,7 +8,7 @@ Start with the [CSV/CLTV comparison and operating steps](../README.md#choose-the
 
 ## If you want to contribute or integrate
 
-[Development](DEVELOPMENT.md) explains how to run the existing tests without real funds. [BATL](BATL-PROTOCOL.md) is the wire-format and output-derivation contract for compatible tooling; it does not promise an existing recovery screen. [Contributing](../CONTRIBUTING.md) explains review and compatibility requirements. Use [private security reporting](../SECURITY.md) for sensitive findings.
+[Development](DEVELOPMENT.md) explains how to run the tests without real funds. [BATL](BATL-PROTOCOL.md) is the wire-format and output-derivation contract; [public backup and recovery](PUBLIC-BACKUP.md) describes the implemented workflow and its limits. [Contributing](../CONTRIBUTING.md) explains review and compatibility requirements. Use [private security reporting](../SECURITY.md) for sensitive findings.
 
 ## If you want to host a copy
 

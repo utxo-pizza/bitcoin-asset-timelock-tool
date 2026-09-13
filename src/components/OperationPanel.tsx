@@ -132,8 +132,8 @@ export function OperationPanel(props: Props) {
         <Alert
           type="warning"
           showIcon
-          message="Records are stored only in this browser's LocalStorage"
-          description={`Do not clear site data. ${props.workspace === 'csv' ? 'This page shows legacy and new CSV records; their locks use BATL v1.' : 'This page shows fixed UTC date records; their locks use BATL v2.'} BATL carries public lock parameters, not a backup of signed transactions; this page has no transaction-ID recovery tool. Do not operate the same record in multiple tabs: LocalStorage is not transactional. Broadcast status is not confirmation or maturity.`}
+          message="Detailed transaction records stay in this browser"
+          description={`Do not clear site data. ${props.workspace === 'csv' ? 'This page shows legacy and new CSV records; their locks use BATL v1.' : 'This page shows fixed UTC date records; their locks use BATL v2.'} The public backup and recovery section below can restore final lock references, but cannot resume an unfinished signed transaction chain. Do not operate the same record in multiple tabs: LocalStorage is not transactional. Broadcast status is not confirmation or maturity.`}
         />
         {props.workspace === 'cltv' && props.records.some((record) => record.status === 'locked') && (
           <Typography.Paragraph className="mt-16">

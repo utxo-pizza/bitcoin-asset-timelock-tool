@@ -64,4 +64,4 @@ The app footer reports a source commit or `unknown`, and explicitly marks uncomm
 
 ## Records do not move with a deployment
 
-LocalStorage is scoped by origin. A fork domain, GitHub Pages origin and the upstream site have separate records and keys. Updating the same origin normally preserves them; changing origin does not migrate them. Do not tell users to clear site data as an upgrade step. The application has no import/recovery-by-txid UI, so preserve original records and pending signed chains privately before changing where users access it.
+LocalStorage is scoped by origin. A fork domain, GitHub Pages origin and the upstream site have separate records and keys. Updating the same origin normally preserves them; changing origin does not migrate them. Do not tell users to clear site data as an upgrade step. [Public recovery](PUBLIC-BACKUP.md) can reconstruct references to existing BATL outputs on another origin, but it cannot migrate API keys or resume lost pending signed chains. Preserve those private records before changing where users access the app.

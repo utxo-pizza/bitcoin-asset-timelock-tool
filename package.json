@@ -34,6 +34,7 @@
   "scripts": {
     "test": "tsx --test tests/*.test.ts",
     "test:ui": "tsx tests/browser/local-ui.ts",
+    "test:ui:recovery": "tsx tests/browser/recovery-ui.ts",
     "docs:check": "tsx scripts/check-docs.ts",
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",

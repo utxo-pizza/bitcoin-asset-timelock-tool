@@ -26,18 +26,19 @@ The default `dev` and `preview` scripts bind `0.0.0.0`; override the host on sha
 | `npm run build` | TypeScript application/config checks and a Vite static build in `dist/` |
 | `npm run preview -- --host 127.0.0.1` | Local serving of that build; not a production server |
 | `npm run test:ui` | Optional browser integration harness after building; requires Playwright and Chromium |
+| `npm run test:ui:recovery` | Separate public-backup/recovery browser harness, including locally signed synthetic unlocks |
 
 To type-check the test harness and documentation checker explicitly:
 
 ```bash
-npx tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution Bundler --skipLibCheck --esModuleInterop --allowSyntheticDefaultImports --jsx react-jsx --types node,vite/client tests/records-date-api.test.ts tests/browser/local-ui.ts scripts/check-docs.ts
+npx tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution Bundler --skipLibCheck --esModuleInterop --allowSyntheticDefaultImports --jsx react-jsx --types node,vite/client tests/*.test.ts tests/browser/*.ts scripts/check-docs.ts
 ```
 
 Vite currently reports dependency `stream`/`events` externalization and a large JavaScript chunk. Record warnings honestly; do not equate a successful bundle with wallet, consensus or asset-indexer acceptance.
 
 ## Browser integration tests
 
-The harness starts its own loopback preview, creates isolated browser contexts, mocks UniSat and OpenAPI, and blocks unexpected off-origin traffic. It does not obtain real wallet credentials, sign real transactions or broadcast to a network. It writes ignored screenshots to `.ui-artifacts/` and closes its browser/preview when finished.
+Each harness starts its own loopback preview, creates isolated browser contexts, mocks UniSat and OpenAPI, and blocks unexpected off-origin traffic. Neither obtains real wallet credentials or broadcasts to a network. The recovery harness signs only synthetic PSBTs with a deliberately public test key to exercise the signature guard. Never fund any fixture address. Both write ignored screenshots to `.ui-artifacts/` and close their browser/preview when finished.
 
 Playwright is optional and is not part of the project's locked dependencies. The recorded browser run used Playwright 1.63.0 and Chromium. One setup for a disposable development environment is:
 
@@ -46,6 +47,7 @@ npm install --no-save --package-lock=false playwright@1.63.0
 npx playwright install chromium
 npm run build
 PLAYWRIGHT_MODULE=playwright npm run test:ui
+PLAYWRIGHT_MODULE=playwright npm run test:ui:recovery
 ```
 
 These installation commands download browser tooling; they are not run by `npm test` or by the harness itself. On Linux, review Playwright's [browser and system-dependency guidance](https://playwright.dev/docs/browsers) before installing OS packages. Do not reconfigure a production machine merely to run a browser test.
@@ -58,7 +60,7 @@ PLAYWRIGHT_CHROMIUM_EXECUTABLE=/absolute/path/to/chrome-headless-shell \
 npm run test:ui
 ```
 
-The Unix-style environment syntax above can be adapted to your shell. `UI_SCENARIO_FILTER` selects scenario names containing a substring; omit it for full coverage. A filtered run is not a full-suite pass.
+Run `npm run test:ui:recovery` with the same environment variables for the recovery harness. The Unix-style environment syntax above can be adapted to your shell. `UI_SCENARIO_FILTER` selects scenario names containing a substring in either harness; omit it for full coverage. A filtered run is not a full-suite pass.
 
 ## Configuration and secrets
 
@@ -76,8 +78,11 @@ Enter the OpenAPI key in Wallet Setup. It is stored locally for convenience, not
 | Separate pages, drafts and fields | [workspace hook](../src/hooks/useLockWorkspaces.ts), [operation panel](../src/components/OperationPanel.tsx), [lock fields](../src/components/LockFields.tsx) |
 | Lock conditions, UTC parsing and transaction construction | [conditions](../src/lib/lock-condition.ts), [dates](../src/lib/lock-date.ts), [transactions](../src/lib/timelock.ts) |
 | BATL and Runestone encoding | [recovery primitives](../src/lib/recovery.ts), [Runestone](../src/lib/runestone.ts) |
+| Public backup format and UI | [manifest](../src/lib/recovery-manifest.ts), [recovery hook](../src/hooks/useRecovery.ts), [recovery panel](../src/components/RecoveryPanel.tsx) |
+| Recovery state, indexed output checks and guarded spending | [references](../src/lib/recovered-records.ts), [recovery API](../src/lib/recovery-api.ts), [chain checks](../src/lib/recovery-chain.ts), [unlock execution](../src/lib/recovery-unlock.ts), [signed transaction guard](../src/lib/signed-transaction.ts) |
 | Namespace validation and guarded record writes | [records](../src/lib/records.ts) |
 | Chain/asset endpoints and MTP snapshots | [OpenAPI](../src/lib/openapi.ts) |
 | Synthetic regression fixtures | [core tests](../tests/core.test.ts), [record/date/API tests](../tests/records-date-api.test.ts), [browser harness](../tests/browser/local-ui.ts) |
+| Public recovery regression fixtures | [manifest/signatures](../tests/recovery-primitives.test.ts), [chain and storage](../tests/recovery-chain.test.ts), [unlock execution](../tests/recovery-unlock.test.ts), [recovery browser harness](../tests/browser/recovery-ui.ts) |
 
 Do not reinterpret a record's schema version as a BATL version. Keep the [architecture guide](ARCHITECTURE.md) and [validation record](VALIDATION.md) aligned with changes. The source tree contains no production keys or real-wallet fixture requirement.

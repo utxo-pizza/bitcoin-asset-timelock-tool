@@ -20,7 +20,7 @@ npm run docs:check
 npm run build
 ```
 
-For UI, state or wallet-orchestration changes, also run the [local browser harness](docs/DEVELOPMENT.md#browser-integration-tests). It uses a loopback preview and synthetic wallet/API responses, not live funds. Report exactly which checks you ran and any skipped checks; a build alone does not validate chain consensus or token balances.
+For UI, state or wallet-orchestration changes, also run both [local browser harnesses](docs/DEVELOPMENT.md#browser-integration-tests): `npm run test:ui` and `npm run test:ui:recovery`. They use loopback previews and synthetic wallet/API responses, not live funds. Report exactly which checks you ran and any skipped checks; a build alone does not validate chain consensus or token balances.
 
 Add a regression test for non-trivial behavior changes. Changes to transaction construction, recovery formats, funds, signing, permissions or persistence need independent review of the actual diff before release. Do not weaken a failing assertion merely to make a test green.
 

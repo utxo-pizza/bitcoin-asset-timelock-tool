@@ -20,7 +20,7 @@ The browser's prechecks and local labels are not the chain's consensus or asset 
 
 `#/csv` shows relative-block inputs and CSV records. `#/cltv` shows fixed UTC inputs, MTP and CLTV records. Empty or unknown fragments resolve to CSV. Each workspace owns its in-memory asset selection, amount, lock parameters, manual fee override and result. Changing pages does not migrate records; reloading discards unsaved drafts.
 
-A shared operation gate prevents overlapping create/resume/unlock operations in one tab. Navigation, direct fragment changes and browser back/forward cannot switch workspaces during confirmation, signing or broadcasting. Wallet provider, account, public key, network, API configuration and saved-record identity are checked across asynchronous boundaries. This is not a lock across multiple browser tabs.
+A shared operation gate prevents overlapping create/resume/unlock and recovery operations in one tab. Navigation, direct fragment changes and browser back/forward cannot switch workspaces during confirmation, signing or broadcasting. Wallet provider, account, public key, network, API configuration and saved-record identity are checked across asynchronous boundaries. This is not a lock across multiple browser tabs.
 
 ## Lock conditions
 
@@ -80,10 +80,16 @@ Those states describe local submission progress, not confirmed chain status. Suc
 
 Records are validated for version, condition, identity fields, outpoints, state and optional fields. A malformed namespace is left unchanged; the healthy one can still be displayed, but errors block record writes. Updates compare the saved record against the expected snapshot and detect some stale/cross-tab changes; they cannot provide transactional isolation across tabs.
 
-Unlock reconstruction uses the saved outpoint and satoshi value; it does not first query that lock output's current unspent state. The full principal returns to the owner's first output and other inputs cover the fee. Runes reuse this same unlock builder without adding another Runestone. Chain confirmation and resulting asset balances must be checked separately.
+The original local-record unlock flow uses the saved outpoint and satoshi value; it does not first query that lock output's current unspent state. The separate recovered-unlock flow below adds that verification without rewriting the old flow. Both return the full principal to the owner's first output, with other inputs covering the fee. Runes reuse the same unlock builder without adding another Runestone. Chain confirmation and resulting asset balances must be checked separately.
 
 ## What recovery does and does not provide
 
 BATL carries a version, lock condition, owner x-only public key and address type. It does not contain the chain, ticker, Rune ID, amount, private key or pending signed transaction chain. A compatible recovery implementation must select the correct network, decode the marker, rederive and match the actual lock script, and verify the UTXO and asset state.
 
-The repository provides encoding/decoding and derivation primitives, **not** a complete transaction-ID recovery or record-import screen. Full local records contain more application data than BATL. Keep records privately backed up; changing domains, browser profiles or devices will not transfer them automatically.
+The public recovery panel accepts a lock transaction ID, a strict public JSON file/text, or an inscription containing that JSON. It selects an explicit chain, recomputes the raw transaction ID, checks a unique supported BATL carrier, and matches the derived script against the actual output. Initial imports restore public references only; a separate check loads confirmation, unspent and asset information. It does not fabricate original creation times, asset amounts, five-transaction history or pending signed PSBTs.
+
+Recovered references use the independent `bitcoin_asset_timelock_recovered_v1` namespace. It stores public outpoints, workspace/source, restoration time and an optional unlock-attempt ID, not a trusted asset-state cache. Malformed data is preserved and prevents writes. Compare-before-write guards catch some stale updates but do not provide cross-tab transactions.
+
+New recovered unlocks recheck the output, indexer completeness, ownership, maturity and selected fee inputs before signing and before broadcast. The existing builder preserves the original condition and returns the principal to the owner. The wallet result must keep every unsigned transaction byte and prevout unchanged, finalize every input, use ALL/DEFAULT signature coverage, and pass signature verification. The attempt ID is saved before broadcast; it means an attempt, not confirmation. Uncertain submissions require checking that ID before any explicit retry.
+
+Public file generation never serializes full records. Actual inscription creation is performed separately by the user in UniSat; the app neither pays for it nor stores wallet authorization on-chain. See the [public format, workflow and limitations](PUBLIC-BACKUP.md).

@@ -51,6 +51,8 @@ import { OperationPanel } from "./components/OperationPanel";
 import { LockWorkspaceNavigation } from "./components/LockWorkspaceNavigation";
 import { useLockWorkspaces, workspaceLockKind } from "./hooks/useLockWorkspaces";
 import { isSelectableUtxo } from "./lib/utxo";
+import { useRecovery } from "./hooks/useRecovery";
+import { RecoveryPanel } from "./components/RecoveryPanel";
 
 const BUILD_COMMIT_HASH = __BUILD_COMMIT_HASH__;
 // Defer the localStorage getter so storage-denied errors reach the record reader.
@@ -242,6 +244,11 @@ function App() {
       },
     };
   };
+  const recovery = useRecovery({ workspace, busy, feeRate, wallet,
+    apiKey: openApiKeyForRequests, hasApiKey: hasOpenApiKey,
+    legacyRecords: recordState.records, legacyErrors: recordState.errors,
+    storage: recordStorage, operationGate: operationGate.current,
+    setBusy, setLoadingText, watchIdentity });
 
   useEffect(() => { messageApi.destroy(); }, [workspace, messageApi]);
 
@@ -1168,6 +1175,7 @@ function App() {
           onUnlock={handleUnlock}
           onCopy={handleCopy}
         />
+        <RecoveryPanel controller={recovery} />
         </section>
       </section>
       <footer className="build-footer">
